@@ -251,11 +251,9 @@ The type byte uses the following formats to implement the above:
     * Followed by the type-dependent payload, including count(s) if needed
 --]]
 
-local LibSerialize
 local MAJOR, MINOR = "LibSerialize", 1
 local LibSerialize = LibStub and LibStub:NewLibrary(MAJOR, MINOR) or {}
-
-if not LibSerialize then return end -- No Upgrade needed.
+if not LibSerialize then return end -- This version is already loaded.
 
 local assert = assert
 local error = error
