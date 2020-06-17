@@ -39,6 +39,14 @@ The following projects served as inspiration for aspects of this project:
 LibSerialize is a Lua library for efficiently serializing/deserializing arbitrary values.
 It supports serializing nils, numbers, booleans, strings, and tables containing these types.
 
+It is best paired with [LibDeflate](https://github.com/safeteeWow/LibDeflate),
+to compress the serialized output and optionally encode it for World of Warcraft
+addon or chat channels.
+
+Note that serialization and compression are sensitive to the specifics of your data set.
+You should experiment with the available libraries (LibSerialize, AceSerializer, LibDeflate,
+LibCompress, etc.) to determine which combination works best for you.
+
 
 ## API:
 * **`LibSerialize:SerializeEx(opts, ...)`**
