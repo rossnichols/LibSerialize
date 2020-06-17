@@ -31,10 +31,12 @@ The following projects served as inspiration for aspects of this project:
 ]]
 
 
+-- Latest version can be found at https://github.com/rossnichols/LibSerialize.
+
 --[[
 # LibSerialize
 
-LibSerialize is a library for efficiently serializing/deserializing arbitrary tables.
+LibSerialize is a Lua library for efficiently serializing/deserializing arbitrary values.
 It supports serializing nils, numbers, booleans, strings, and tables containing these types.
 
 
