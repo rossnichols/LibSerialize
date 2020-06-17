@@ -252,8 +252,13 @@ The type byte uses the following formats to implement the above:
 --]]
 
 local MAJOR, MINOR = "LibSerialize", 1
-local LibSerialize = LibStub and LibStub:NewLibrary(MAJOR, MINOR) or {}
-if not LibSerialize then return end -- This version is already loaded.
+local LibSerialize
+if LibStub then
+    LibSerialize = LibStub:NewLibrary(MAJOR, MINOR)
+    if not LibSerialize then return end -- This version is already loaded.
+else
+    LibSerialize = {}
+end
 
 local assert = assert
 local error = error
