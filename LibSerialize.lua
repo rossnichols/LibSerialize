@@ -869,7 +869,6 @@ end
 -- Lookup tables to map the number of required bytes to the
 -- appropriate reader table index.
 local numberIndices = {
-    [1] = LibSerialize._ReaderIndex.NUM_8_POS,
     [2] = LibSerialize._ReaderIndex.NUM_16_POS,
     [3] = LibSerialize._ReaderIndex.NUM_24_POS,
     [4] = LibSerialize._ReaderIndex.NUM_32_POS,
