@@ -39,13 +39,63 @@ The following projects served as inspiration for aspects of this project:
 LibSerialize is a Lua library for efficiently serializing/deserializing arbitrary values.
 It supports serializing nils, numbers, booleans, strings, and tables containing these types.
 
-It is best paired with [LibDeflate](https://github.com/safeteeWow/LibDeflate),
-to compress the serialized output and optionally encode it for World of Warcraft
-addon or chat channels.
+It is best paired with [LibDeflate](https://github.com/safeteeWow/LibDeflate), to compress
+the serialized output and optionally encode it for World of Warcraft addon or chat channels.
+IMPORTANT: if you decide not to compress the output and plan on transmitting over an addon
+channel, it still needs to be encoded, but encoding via `LibDeflate:EncodeForWoWAddonChannel()`
+or `LibCompress:GetAddonEncodeTable()` will likely inflate the size of the serialization
+by a considerable amount. See the usage below for an alternative.
 
 Note that serialization and compression are sensitive to the specifics of your data set.
 You should experiment with the available libraries (LibSerialize, AceSerializer, LibDeflate,
 LibCompress, etc.) to determine which combination works best for you.
+
+
+## Usage:
+
+```lua
+-- Dependencies: AceAddon-3.0, AceComm-3.0, LibSerialize, LibDeflate
+MyAddon = LibStub("AceAddon-3.0"):NewAddon("MyAddon", "AceComm-3.0")
+
+function MyAddon:OnEnable()
+    self:RegisterComm("MyPrefix")
+end
+
+-- With compression (recommended):
+function MyAddon:Transmit(data)
+    local serialized = LibSerialize:Serialize(data)
+    local compressed = LibDeflate:CompressDeflate(serialized)
+    local encoded = LibDeflate:EncodeForWoWAddonChannel(compressed)
+    self:SendCommMessage("MyPrefix", encoded, "WHISPER", UnitName("player"))
+end
+
+function MyAddon:OnCommReceived(prefix, payload, distribution, sender)
+    local decoded = LibDeflate:DecodeForWoWAddonChannel(payload)
+    if not decoded then return end
+    local decompressed = LibDeflate:DecompressDeflate(decoded)
+    if not decompressed then return end
+    local success, data = LibSerialize:Deserialize(decompressed)
+    if not success then return end
+
+    -- Handle `data`
+end
+
+-- Without compression (custom codec):
+MyAddon._codec = LibDeflate:CreateCodec("\000", "\255", "")
+function MyAddon:Transmit(data)
+    local serialized = LibSerialize:Serialize(data)
+    local encoded = self._codec:Encode(serialized)
+    self:SendCommMessage("MyPrefix", encoded, "WHISPER", UnitName("player"))
+end
+function MyAddon:OnCommReceived(prefix, payload, distribution, sender)
+    local decoded = self._condec:Decode(payload)
+    if not decoded then return end
+    local success, data = LibSerialize:Deserialize(decoded)
+    if not success then return end
+
+    -- Handle `data`
+end
+```
 
 
 ## API:
