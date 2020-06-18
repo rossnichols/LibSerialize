@@ -27,7 +27,7 @@ The following projects served as inspiration for aspects of this project:
 2. lua-MessagePack, by François Perrad. https://framagit.org/fperrad/lua-MessagePack
     For the mechanism for packing/unpacking floats and ints.
 3. LibQuestieSerializer, by aero. https://github.com/AeroScripts/LibQuestieSerializer
-    For the general approach of "type byte, payload" for serializing.
+    For the basis of the implementation, and initial inspiration.
 ]]
 
 
