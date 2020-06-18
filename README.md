@@ -20,6 +20,8 @@ LibCompress, etc.) to determine which combination works best for you.
 ```lua
 -- Dependencies: AceAddon-3.0, AceComm-3.0, LibSerialize, LibDeflate
 MyAddon = LibStub("AceAddon-3.0"):NewAddon("MyAddon", "AceComm-3.0")
+local LibSerialize = LibStub("LibSerialize")
+local LibDeflate = LibStub("LibDeflate")
 
 function MyAddon:OnEnable()
     self:RegisterComm("MyPrefix")
