@@ -88,7 +88,7 @@ function MyAddon:Transmit(data)
     self:SendCommMessage("MyPrefix", encoded, "WHISPER", UnitName("player"))
 end
 function MyAddon:OnCommReceived(prefix, payload, distribution, sender)
-    local decoded = self._condec:Decode(payload)
+    local decoded = self._codec:Decode(payload)
     if not decoded then return end
     local success, data = LibSerialize:Deserialize(decoded)
     if not success then return end
