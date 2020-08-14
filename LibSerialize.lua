@@ -172,6 +172,11 @@ The following serialization options are supported:
   * `false`: unserializable types will be ignored. If it's a table key or value,
      the key/value pair will be skipped. If it's one of the arguments to the
      call to SerializeEx(), it will be replaced with `nil`.
+* `stable`: `boolean` (default false)
+  * `true`: the resulting string will be stable, even if the input includes
+     maps. This option comes with an extra memory usage and CPU time cost.
+  * `false`: the resulting string will be unstable and will potentially differ
+     between invocations if the input includes maps
 * `filter`: `function(t, k, v) => boolean` (default nil)
   * If specified, the function will be called on every key/value pair in every
     table encountered during serialization. The function must return true for
@@ -335,9 +340,11 @@ local string_char = string.char
 local string_sub = string.sub
 local table_concat = table.concat
 local table_insert = table.insert
+local table_sort = table.sort
 
 local defaultOptions = {
-    errorOnUnserializableType = true
+    errorOnUnserializableType = true,
+    stable = false
 }
 
 local canSerializeFnOptions = {
@@ -374,6 +381,43 @@ end
 local function IsFractional(value)
     local _, fract = math_modf(value)
     return fract ~= 0
+end
+
+-- Sort compare function which is used to sort table keys to ensure that the
+-- serialization of maps is stable.
+local function TableKeySortHelper(a, b)
+    local aType = type(a)
+    local bType = type(b)
+    -- put tables at the front
+    if aType == "table" and bType == "table" then
+        return tostring(a) < tostring(b)
+    elseif aType == "table" then
+        return true
+    elseif bType == "table" then
+        return false
+    end
+    -- put strings next
+    if aType == "string" and bType == "string" then
+        return a < b
+    elseif aType == "string" then
+        return true
+    elseif bType == "string" then
+        return false
+    end
+    -- put numbers next
+    if aType == "number" and bType == "number" then
+        return a < b
+    elseif aType == "number" then
+        return true
+    elseif bType == "number" then
+        return false
+    end
+    -- put booleans last
+    if aType == "boolean" and bType == "boolean" then
+        return (a and 1 or 0) < (b and 1 or 0)
+    else
+        error(("Unhandled type: %s, %s"):format(aType, bType))
+    end
 end
 
 -- Prints args to the chat window. To enable debug statements,
@@ -1112,13 +1156,30 @@ LibSerialize._WriterTable = {
                 end
 
                 local mapCountWritten = 0
-                for k, v in pairs(tab) do
-                    -- Exclude keys that have already been written via the previous loop.
-                    local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFractional(k)
-                    if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
+                if opts.stable then
+                    local mapKeys = {}
+                    for k in pairs(tab) do
+                        -- Exclude keys that have already been written via the previous loop.
+                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFractional(k)
+                        if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
+                            table_insert(mapKeys, k)
+                        end
+                    end
+                    table_sort(mapKeys, TableKeySortHelper)
+                    for _, k in ipairs(mapKeys) do
                         self:_WriteObject(k, opts)
-                        self:_WriteObject(v, opts)
+                        self:_WriteObject(tab[k], opts)
                         mapCountWritten = mapCountWritten + 1
+                    end
+                else
+                    for k, v in pairs(tab) do
+                        -- Exclude keys that have already been written via the previous loop.
+                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFractional(k)
+                        if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
+                            self:_WriteObject(k, opts)
+                            self:_WriteObject(v, opts)
+                            mapCountWritten = mapCountWritten + 1
+                        end
                     end
                 end
                 assert(mapCount == mapCountWritten)
@@ -1135,10 +1196,24 @@ LibSerialize._WriterTable = {
                     self:_WriteInt(mapCount, required)
                 end
 
-                for k, v in pairs(tab) do
-                    if entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter) then
+                if opts.stable then
+                    local mapKeys = {}
+                    for k in pairs(tab) do
+                        if entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter) then
+                            table_insert(mapKeys, k)
+                        end
+                    end
+                    table_sort(mapKeys, TableKeySortHelper)
+                    for _, k in ipairs(mapKeys) do
                         self:_WriteObject(k, opts)
-                        self:_WriteObject(v, opts)
+                        self:_WriteObject(tab[k], opts)
+                    end
+                else
+                    for k, v in pairs(tab) do
+                        if entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter) then
+                            self:_WriteObject(k, opts)
+                            self:_WriteObject(v, opts)
+                        end
                     end
                 end
             end
