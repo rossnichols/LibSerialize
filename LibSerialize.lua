@@ -463,7 +463,6 @@ end
 -- 1. ReadBytes(bytelen)
 -- 2. ReaderBytesLeft()
 local function CreateReader(input)
-    local input = input
     local inputLen = #input
     local nextPos = 1
 
@@ -672,7 +671,7 @@ function LibSerialize:_ReadTable(entryCount, value)
         self:_AddReference(tableRefs, value)
     end
 
-    for i = 1, entryCount do
+    for _ = 1, entryCount do
         local k, v = self:_ReadPair(self._ReadObject)
         value[k] = v
     end
@@ -1158,7 +1157,7 @@ LibSerialize._WriterTable = {
                 local mapCountWritten = 0
                 if opts.stable then
                     local mapKeys = {}
-                    for k in pairs(tab) do
+                    for k, v in pairs(tab) do
                         -- Exclude keys that have already been written via the previous loop.
                         local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFractional(k)
                         if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
@@ -1198,7 +1197,7 @@ LibSerialize._WriterTable = {
 
                 if opts.stable then
                     local mapKeys = {}
-                    for k in pairs(tab) do
+                    for k, v in pairs(tab) do
                         if entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter) then
                             table_insert(mapKeys, k)
                         end
