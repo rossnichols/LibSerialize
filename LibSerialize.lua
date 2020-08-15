@@ -1156,6 +1156,8 @@ LibSerialize._WriterTable = {
 
                 local mapCountWritten = 0
                 if opts.stable then
+                    -- In order to ensure that the output is stable, we sort the map keys and write
+                    -- them in the sorted order.
                     local mapKeys = {}
                     for k, v in pairs(tab) do
                         -- Exclude keys that have already been written via the previous loop.
@@ -1196,6 +1198,8 @@ LibSerialize._WriterTable = {
                 end
 
                 if opts.stable then
+                    -- In order to ensure that the output is stable, we sort the map keys and write
+                    -- them in the sorted order.
                     local mapKeys = {}
                     for k, v in pairs(tab) do
                         if entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter) then
