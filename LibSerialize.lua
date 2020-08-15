@@ -384,19 +384,12 @@ local function IsFractional(value)
 end
 
 -- Sort compare function which is used to sort table keys to ensure that the
--- serialization of maps is stable.
+-- serialization of maps is stable. We arbitrarily put strings first, then
+-- numbers, and finally booleans.
 local function TableKeySortHelper(a, b)
     local aType = type(a)
     local bType = type(b)
-    -- put tables at the front
-    if aType == "table" and bType == "table" then
-        return tostring(a) < tostring(b)
-    elseif aType == "table" then
-        return true
-    elseif bType == "table" then
-        return false
-    end
-    -- put strings next
+    -- put strings first
     if aType == "string" and bType == "string" then
         return a < b
     elseif aType == "string" then
@@ -416,7 +409,7 @@ local function TableKeySortHelper(a, b)
     if aType == "boolean" and bType == "boolean" then
         return (a and 1 or 0) < (b and 1 or 0)
     else
-        error(("Unhandled type: %s, %s"):format(aType, bType))
+        error(("Unhandled sort type(s): %s, %s"):format(aType, bType))
     end
 end
 
