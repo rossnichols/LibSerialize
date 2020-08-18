@@ -53,7 +53,7 @@ do
         filter = function(t, k, v) return k ~= "c" end
     }})
     local opts = {
-        filter = function(t, k, v) return LibSerialize:IsSerializableType(k, v) end,
+        filter = function(t, k, v) return LibSerialize:IsSerializableType(k, v) end
     }
     local serialized = LibSerialize:SerializeEx(opts, t)
     local success, tab = LibSerialize:Deserialize(serialized)
