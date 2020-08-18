@@ -386,7 +386,7 @@ end
 -- Sort compare function which is used to sort table keys to ensure that the
 -- serialization of maps is stable. We arbitrarily put strings first, then
 -- numbers, and finally booleans.
-local function TableKeySortHelper(a, b)
+local function StableKeySort(a, b)
     local aType = type(a)
     local bType = type(b)
     -- Put strings first
@@ -1159,7 +1159,7 @@ LibSerialize._WriterTable = {
                             table_insert(mapKeys, k)
                         end
                     end
-                    table_sort(mapKeys, TableKeySortHelper)
+                    table_sort(mapKeys, StableKeySort)
                     for _, k in ipairs(mapKeys) do
                         self:_WriteObject(k, opts)
                         self:_WriteObject(tab[k], opts)
@@ -1199,7 +1199,7 @@ LibSerialize._WriterTable = {
                             table_insert(mapKeys, k)
                         end
                     end
-                    table_sort(mapKeys, TableKeySortHelper)
+                    table_sort(mapKeys, StableKeySort)
                     for _, k in ipairs(mapKeys) do
                         self:_WriteObject(k, opts)
                         self:_WriteObject(tab[k], opts)

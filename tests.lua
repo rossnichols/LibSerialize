@@ -54,6 +54,32 @@ do
     }})
     local opts = {
         filter = function(t, k, v) return LibSerialize:IsSerializableType(k, v) end,
+    }
+    local serialized = LibSerialize:SerializeEx(opts, t)
+    local success, tab = LibSerialize:Deserialize(serialized)
+    assert(success)
+    assert(tab.a == 1)
+    assert(tab.b == nil)
+    assert(tab.c == 3)
+    assert(tab.nested.a == 1)
+    assert(tab.nested.b == nil)
+    assert(tab.nested.c == nil)
+end
+
+
+--[[---------------------------------------------------------------------------
+Test of stable serialization
+--]]---------------------------------------------------------------------------
+
+do
+    local t = { a = 1, b = print, c = 3 }
+    local nested = { a = 1, b = print, c = 3 }
+    t.nested = nested
+    setmetatable(nested, { __LibSerialize = {
+        filter = function(t, k, v) return k ~= "c" end
+    }})
+    local opts = {
+        filter = function(t, k, v) return LibSerialize:IsSerializableType(k, v) end,
         stable = true
     }
     local serialized = LibSerialize:SerializeEx(opts, t)
