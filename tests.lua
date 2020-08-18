@@ -68,6 +68,84 @@ end
 
 
 --[[---------------------------------------------------------------------------
+    Test of stable serialization
+--]]---------------------------------------------------------------------------
+
+do
+    local t = { a = 1, b = print, c = 3 }
+    local nested = { a = 1, b = print, c = 3 }
+    t.nested = nested
+    setmetatable(nested, { __LibSerialize = {
+        filter = function(t, k, v) return k ~= "c" end
+    }})
+    local opts = {
+        filter = function(t, k, v) return LibSerialize:IsSerializableType(k, v) end,
+        stable = true
+    }
+    local serialized = LibSerialize:SerializeEx(opts, t)
+    local success, tab = LibSerialize:Deserialize(serialized)
+    assert(success)
+    assert(tab.a == 1)
+    assert(tab.b == nil)
+    assert(tab.c == 3)
+    assert(tab.nested.a == 1)
+    assert(tab.nested.b == nil)
+    assert(tab.nested.c == nil)
+end
+
+do
+    local t1 = { x = "y", "test", [false] = { 1, 2, 3, a = "b" } }
+    local opts = {
+        stable = true,
+        filter = function(t, k, v) return not tonumber(k) or tonumber(k) < 100 end
+    }
+    local serialized1 = LibSerialize:SerializeEx(opts, t1)
+    local success1, tab1 = LibSerialize:Deserialize(serialized1)
+    assert(success1)
+    assert(tab1[1] == "test")
+    assert(tab1.x == "y")
+    assert(tab1[false][1] == 1)
+    assert(tab1[false][2] == 2)
+    assert(tab1[false][3] == 3)
+    assert(tab1[false].a == "b")
+
+    -- make a copy of the original table, but first insert a bunch of extra keys (which we'll
+    -- filter out) to force the order of the hashes to be different (tested with lua 5.1 and 5.2)
+    local t2 = {}
+    for i = 100, 10000 do
+        t2[tostring(i)] = i
+    end
+    t2.x = "y"
+    t2[1] = "test"
+    t2[false] = { 1, 2, 3, a = "b" }
+
+    -- ensure the iteration order is different
+    local isDifferent = false
+    local k1, k2 = nil, nil
+    while true do
+        k1 = next(t1, k1)
+        -- get the next key from t2 that's not going to be filtered
+        while true do
+            k2 = next(t2, k2)
+            if k2 == nil or not tonumber(k2) or tonumber(k2) < 100 then
+                break
+            end
+        end
+        if k1 == nil and k2 == nil then
+            break
+        end
+        assert(k1 ~= nil and k2 ~= nil)
+        isDifferent = isDifferent or k1 ~= k2
+    end
+    assert(isDifferent)
+
+    -- serialize the copy and ensure the result is the same
+    local serialized2 = LibSerialize:SerializeEx(opts, t2)
+    assert(serialized2 == serialized1)
+end
+
+
+--[[---------------------------------------------------------------------------
     Utilities
 --]]---------------------------------------------------------------------------
 

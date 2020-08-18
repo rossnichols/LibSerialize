@@ -136,6 +136,11 @@ The following serialization options are supported:
   * `false`: unserializable types will be ignored. If it's a table key or value,
      the key/value pair will be skipped. If it's one of the arguments to the
      call to SerializeEx(), it will be replaced with `nil`.
+* `stable`: `boolean` (default false)
+  * `true`: the resulting string will be stable, even if the input includes
+     maps. This option comes with an extra memory usage and CPU time cost.
+  * `false`: the resulting string will be unstable and will potentially differ
+     between invocations if the input includes maps
 * `filter`: `function(t, k, v) => boolean` (default nil)
   * If specified, the function will be called on every key/value pair in every
     table encountered during serialization. The function must return true for
