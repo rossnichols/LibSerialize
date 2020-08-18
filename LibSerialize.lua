@@ -389,7 +389,7 @@ end
 local function TableKeySortHelper(a, b)
     local aType = type(a)
     local bType = type(b)
-    -- put strings first
+    -- Put strings first
     if aType == "string" and bType == "string" then
         return a < b
     elseif aType == "string" then
@@ -397,7 +397,7 @@ local function TableKeySortHelper(a, b)
     elseif bType == "string" then
         return false
     end
-    -- put numbers next
+    -- Put numbers next
     if aType == "number" and bType == "number" then
         return a < b
     elseif aType == "number" then
@@ -405,7 +405,7 @@ local function TableKeySortHelper(a, b)
     elseif bType == "number" then
         return false
     end
-    -- put booleans last
+    -- Put booleans last
     if aType == "boolean" and bType == "boolean" then
         return (a and 1 or 0) < (b and 1 or 0)
     else
