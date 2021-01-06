@@ -1,4 +1,4 @@
-local LibSerialize = require("LibSerialize")
+local LibSerialize = LibStub and LibStub:GetLibrary("LibSerialize") or require("LibSerialize")
 
 local pairs = pairs
 local type = type
@@ -149,6 +149,10 @@ end
     Utilities
 --]]---------------------------------------------------------------------------
 
+local function isnan(value)
+    return value ~= value or value > value
+end
+
 local function tCompare(lhsTable, rhsTable, depth)
     depth = depth or 1
     for key, value in pairs(lhsTable) do
@@ -201,6 +205,12 @@ local function check(value, bytelen, cmp)
         fail(value, ("Deserialization failed: %s"):format(deserialized))
     end
 
+    -- Tests involving NaNs will be compared in string form.
+    if type(value) == "number" and isnan(value) then
+        value = tostring(value)
+        deserialized = tostring(deserialized)
+    end
+
     local typ = type(value)
     if typ == "table" and not tCompare(cmp or value, deserialized) then
         fail(value, "Non-matching deserialization result")
@@ -248,6 +258,9 @@ local testCases = {
     { -1.5, 6 },
     { -123.45678901235, 10 },
     { -148921291233.23, 10 },
+    { 0/0, 10 },  -- -1.#IND or -nan(ind)
+    { 1/0, 10 },  -- 1.#INF or inf
+    { -1/0, 10 }, -- -1.#INF or -inf
     { "", 2 },
     { "a", 3 },
     { "abcdefghijklmno", 17 },
@@ -273,6 +286,8 @@ local testCases = {
     { { a = print, b = 1, c = print }, 5, { b = 1 } },
     { { a = print, [print] = "a" }, 2, {} },
     { { "banned", 1, 2, 3, banned = 4, test = "banned", a = 1 }, 9, { nil, 1, 2, 3, a = 1 } },
+    { { 1, 2, [math.huge] = "f", [3] = 3 }, 16 },
+    { { 1, 2, [-math.huge] = "f", [3] = 3 }, 16 },
 }
 
 do

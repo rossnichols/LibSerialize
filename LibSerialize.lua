@@ -376,11 +376,32 @@ local function GetRequiredBytesNumber(value)
     return 7
 end
 
+-- Returns whether the value (a number) is NaN.
+local function IsNaN(value)
+    -- When floating point optimizations are in place, NaNs will compare
+    -- as being equal/greater/lesser to any number including themselves.
+    return value ~= value or value > value
+end
+
+-- Returns whether the value (a number) is finite, as opposed to being a
+-- NaN or infinity.
+local function IsFinite(value)
+    -- When floating point optimizations are in place, NaNs are caught by
+    -- the range check at the end of this test.
+    return value == value and not (value <= -math_huge or value >= math_huge)
+end
+
 -- Returns whether the value (a number) is fractional,
 -- as opposed to a whole number.
 local function IsFractional(value)
     local _, fract = math_modf(value)
     return fract ~= 0
+end
+
+-- Returns whether the value (a number) needs to be represented as a floating
+-- point number due to either being fractional or non-finite.
+local function IsFloatingPoint(value)
+    return IsFractional(value) or not IsFinite(value)
 end
 
 -- Sort compare function which is used to sort table keys to ensure that the
@@ -487,9 +508,10 @@ local function FloatToString(n)
         n = -n
     end
     local mant, expo = frexp(n)
-    if mant ~= mant then -- nan
+
+    if IsNaN(n) then -- nan
         return string_char(0xFF, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-    elseif mant == math_huge or expo > 0x400 then
+    elseif mant == math_huge or expo > 0x400 or IsNaN(mant) then
         if sign == 0 then -- inf
             return string_char(0x7F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
         else -- -inf
@@ -947,7 +969,7 @@ LibSerialize._WriterTable = {
         self:_WriteByte(readerIndexShift * self._ReaderIndex.NIL)
     end,
     ["number"] = function(self, num)
-        if IsFractional(num) then
+        if IsFloatingPoint(num) then
             -- DebugPrint("Serializing float:", num)
             -- Normally a float takes 8 bytes. See if it's cheaper to encode as a string.
             -- If we encode as a string, though, we'll need a byte for its length.
@@ -958,7 +980,7 @@ LibSerialize._WriterTable = {
                 numAbs = -num
             end
             local asString = tostring(numAbs)
-            if #asString < 7 and tonumber(asString) == numAbs then
+            if #asString < 7 and tonumber(asString) == numAbs and IsFinite(numAbs) then
                 self:_WriteByte(sign + readerIndexShift * self._ReaderIndex.NUM_FLOATSTR_POS)
                 self:_WriteByte(#asString, 1)
                 self._writeString(asString)
@@ -1082,7 +1104,7 @@ LibSerialize._WriterTable = {
             local mapCount = 0
             local entireMapSerializable = true
             for k, v in pairs(tab) do
-                local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFractional(k)
+                local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
                 if not isArrayKey then
                     if self:_ShouldSerialize(tab, k, v, opts, filter) then
                         mapCount = mapCount + 1
@@ -1154,7 +1176,7 @@ LibSerialize._WriterTable = {
                     local mapKeys = {}
                     for k, v in pairs(tab) do
                         -- Exclude keys that have already been written via the previous loop.
-                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFractional(k)
+                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
                         if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
                             table_insert(mapKeys, k)
                         end
@@ -1168,7 +1190,7 @@ LibSerialize._WriterTable = {
                 else
                     for k, v in pairs(tab) do
                         -- Exclude keys that have already been written via the previous loop.
-                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFractional(k)
+                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
                         if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
                             self:_WriteObject(k, opts)
                             self:_WriteObject(v, opts)
