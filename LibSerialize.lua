@@ -378,9 +378,9 @@ end
 
 -- Returns whether the value (a number) is NaN.
 local function IsNaN(value)
-    -- When floating point optimizations are in place, NaNs will compare
-    -- as being equal/greater/lesser to any number including themselves.
-    return value ~= value or value > value
+    -- With floating point optimizations enabled all comparisons involving
+    -- NaNs will return true. Without them, these will both return false.
+    return (value < 0) == (value >= 0)
 end
 
 -- Returns whether the value (a number) is finite, as opposed to being a

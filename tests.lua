@@ -150,7 +150,7 @@ end
 --]]---------------------------------------------------------------------------
 
 local function isnan(value)
-    return value ~= value or value > value
+    return (value < 0) == (value >= 0)
 end
 
 local function tCompare(lhsTable, rhsTable, depth)
