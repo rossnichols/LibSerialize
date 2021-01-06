@@ -402,6 +402,12 @@ local function IsFloatingPoint(value)
     return IsFractional(value) or not IsFinite(value)
 end
 
+-- Returns true if the given table key is an integer that can reside in the
+-- array section of a table (keys 1 through arrayCount).
+local function IsArrayKey(k, arrayCount)
+    return type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
+end
+
 -- Sort compare function which is used to sort table keys to ensure that the
 -- serialization of maps is stable. We arbitrarily put strings first, then
 -- numbers, and finally booleans.
@@ -1105,8 +1111,7 @@ LibSerialize._WriterTable = {
             local mapCount = 0
             local entireMapSerializable = true
             for k, v in pairs(tab) do
-                local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
-                if not isArrayKey then
+                if not IsArrayKey(k, arrayCount) then
                     if self:_ShouldSerialize(tab, k, v, opts, filter) then
                         mapCount = mapCount + 1
                     else
@@ -1177,8 +1182,7 @@ LibSerialize._WriterTable = {
                     local mapKeys = {}
                     for k, v in pairs(tab) do
                         -- Exclude keys that have already been written via the previous loop.
-                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
-                        if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
+                        if not IsArrayKey(k, arrayCount) and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
                             table_insert(mapKeys, k)
                         end
                     end
@@ -1191,8 +1195,7 @@ LibSerialize._WriterTable = {
                 else
                     for k, v in pairs(tab) do
                         -- Exclude keys that have already been written via the previous loop.
-                        local isArrayKey = type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
-                        if not isArrayKey and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
+                        if not IsArrayKey(k, arrayCount) and (entireMapSerializable or self:_ShouldSerialize(tab, k, v, opts, filter)) then
                             self:_WriteObject(k, opts)
                             self:_WriteObject(v, opts)
                             mapCountWritten = mapCountWritten + 1
