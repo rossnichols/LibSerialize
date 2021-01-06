@@ -502,6 +502,10 @@ end
 --]]---------------------------------------------------------------------------
 
 local function FloatToString(n)
+    if IsNaN(n) then -- nan
+        return string_char(0xFF, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+    end
+
     local sign = 0
     if n < 0.0 then
         sign = 0x80
@@ -509,9 +513,8 @@ local function FloatToString(n)
     end
     local mant, expo = frexp(n)
 
-    if IsNaN(n) then -- nan
-        return string_char(0xFF, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-    elseif mant == math_huge or expo > 0x400 or IsNaN(mant) then
+    -- If n is infinity, mant will be infinity inside WoW, but NaN elsewhere.
+    if (mant == math_huge or IsNaN(mant)) or expo > 0x400 then
         if sign == 0 then -- inf
             return string_char(0x7F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
         else -- -inf
