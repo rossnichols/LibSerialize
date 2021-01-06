@@ -980,6 +980,10 @@ LibSerialize._WriterTable = {
             -- DebugPrint("Serializing float:", num)
             -- Normally a float takes 8 bytes. See if it's cheaper to encode as a string.
             -- If we encode as a string, though, we'll need a byte for its length.
+            --
+            -- Note that we only string encode finite values due to potential differences
+            -- in encode/decode behaviour with such representations in some
+            -- environments.
             local sign = 0
             local numAbs = num
             if num < 0 then
