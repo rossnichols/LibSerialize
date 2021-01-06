@@ -386,9 +386,7 @@ end
 -- Returns whether the value (a number) is finite, as opposed to being a
 -- NaN or infinity.
 local function IsFinite(value)
-    -- When floating point optimizations are in place, NaNs are caught by
-    -- the range check at the end of this test.
-    return value == value and not (value == -math_huge or value == math_huge)
+    return value > -math_huge and value < math_huge and not IsNaN(value)
 end
 
 -- Returns whether the value (a number) is fractional,
