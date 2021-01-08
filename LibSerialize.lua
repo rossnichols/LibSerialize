@@ -308,7 +308,7 @@ The type byte uses the following formats to implement the above:
     * Followed by the type-dependent payload, including count(s) if needed
 --]]
 
-local MAJOR, MINOR = "LibSerialize", 3
+local MAJOR, MINOR = "LibSerialize", 4
 local LibSerialize
 if LibStub then
     LibSerialize = LibStub:NewLibrary(MAJOR, MINOR)
@@ -319,7 +319,10 @@ end
 
 -- Rev the serialization version when making a breaking change.
 -- Make sure to handle older versions properly within LibSerialize:DeserializeValue.
+-- NOTE: these normally can be idential, but due to a bug when revving MINOR to 2,
+-- we need to support both 1 and 2 as v1 serialization versions.
 local SERIALIZATION_VERSION = 1
+local DESERIALIZATION_VERSION = 2
 
 local assert = assert
 local error = error
@@ -1304,7 +1307,7 @@ function LibSerialize:DeserializeValue(input)
     -- Since there's only one compression version currently,
     -- no extra work needs to be done to decode the data.
     local version = self:_ReadByte()
-    assert(version == SERIALIZATION_VERSION)
+    assert(version <= DESERIALIZATION_VERSION)
 
     -- Since the objects we read may be nil, we need to explicitly
     -- track the number of results and assign by index so that we
