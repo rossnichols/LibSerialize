@@ -186,23 +186,23 @@ function LibSerialize:RunTests()
         Test cases for serialization
     --]]---------------------------------------------------------------------------
 
-    local function fail(value, desc)
-        assert(false, ("Test failed (%s): %s"):format(tostring(value), desc))
+    local function fail(index, fromVer, toVer, value, desc)
+        assert(false, ("Test #%d failed (serialization ver: %s, deserialization ver: %s) (%s): %s"):format(index, fromVer, toVer, tostring(value), desc))
     end
 
     local function testfilter(t, k, v)
         return k ~= "banned" and v ~= "banned"
     end
 
-    local function check(value, bytelen, cmp)
-        local serialized = LibSerialize:SerializeEx({ errorOnUnserializableType = false, filter = testfilter }, value)
+    local function check(index, fromVer, from, toVer, to, value, bytelen, cmp)
+        local serialized = from:SerializeEx({ errorOnUnserializableType = false, filter = testfilter }, value)
         if #serialized ~= bytelen then
-            fail(value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen))
+            fail(index, fromVer, toVer, value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen))
         end
 
-        local success, deserialized = LibSerialize:Deserialize(serialized)
+        local success, deserialized = to:Deserialize(serialized)
         if not success then
-            fail(value, ("Deserialization failed: %s"):format(deserialized))
+            fail(index, fromVer, toVer, value, ("Deserialization failed: %s"):format(deserialized))
         end
 
         -- Tests involving NaNs will be compared in string form.
@@ -213,17 +213,23 @@ function LibSerialize:RunTests()
 
         local typ = type(value)
         if typ == "table" and not tCompare(cmp or value, deserialized) then
-            fail(value, "Non-matching deserialization result")
+            fail(index, fromVer, toVer, value, "Non-matching deserialization result")
         elseif typ ~= "table" and value ~= deserialized then
-            fail(value, ("Non-matching deserialization result: %s"):format(tostring(deserialized)))
+            fail(index, fromVer, toVer, value, ("Non-matching deserialization result: %s"):format(tostring(deserialized)))
         end
     end
 
-    -- Format: each test case is { value, bytelen, cmp }. The value will be serialized
+    local function checkLatest(index, value, bytelen, cmp)
+        check(index, "latest", LibSerialize, "latest", LibSerialize, value, bytelen, cmp)
+    end
+
+    -- Format: each test case is { value, bytelen, cmp, earliest }. The value will be serialized
     -- and then deserialized, checking for success and equality, and the length of
     -- the serialized string will be compared against bytelen. If `cmp` is provided,
     -- it will be used for comparison against the deserialized result instead of `value`.
     -- Note that the length always contains one extra byte for the version number.
+    -- `earliest` is an index into the `versions` table below, indicating the earliest
+    -- version that supports the test case.
     local testCases = {
         { nil, 2 },
         { true, 2 },
@@ -260,8 +266,8 @@ function LibSerialize:RunTests()
         { -123.45678901235, 10 },
         { -148921291233.23, 10 },
         { 0/0, 10 },  -- -1.#IND or -nan(ind)
-        { 1/0, 10 },  -- 1.#INF or inf
-        { -1/0, 10 }, -- -1.#INF or -inf
+        { 1/0, 10, nil, 3 },  -- 1.#INF or inf
+        { -1/0, 10, nil, 3 }, -- -1.#INF or -inf
         { "", 2 },
         { "a", 3 },
         { "abcdefghijklmno", 17 },
@@ -287,8 +293,8 @@ function LibSerialize:RunTests()
         { { a = print, b = 1, c = print }, 5, { b = 1 } },
         { { a = print, [print] = "a" }, 2, {} },
         { { "banned", 1, 2, 3, banned = 4, test = "banned", a = 1 }, 9, { nil, 1, 2, 3, a = 1 } },
-        { { 1, 2, [math.huge] = "f", [3] = 3 }, 16 },
-        { { 1, 2, [-math.huge] = "f", [3] = 3 }, 16 },
+        { { 1, 2, [math.huge] = "f", [3] = 3 }, 16, nil, 3 },
+        { { 1, 2, [-math.huge] = "f", [3] = 3 }, 16, nil, 3 },
     }
 
     do
@@ -297,8 +303,33 @@ function LibSerialize:RunTests()
         table.insert(testCases, { { { a = 1, b = 2 }, { a = 1, b = 2 }, { a = 1, b = 2 } }, 23 })
     end
 
-    for _, testCase in ipairs(testCases) do
-        check(unpack(testCase))
+    for i, testCase in ipairs(testCases) do
+        checkLatest(i, unpack(testCase))
+    end
+
+    if require then
+        local versions = {
+            { "v1.0.0", require("archive\\LibSerialize-v1-0-0") },
+            { "v1.1.0", require("archive\\LibSerialize-v1-1-0") },
+            -- v1.1.1 skipped due to bug with serialization version causing known failures.
+            { "v1.1.2", require("archive\\LibSerialize-v1-1-2") },
+            { "latest", LibSerialize },
+        }
+
+        for i = 1, #versions do
+            for j = i + 1, #versions do
+                local fromVer, from = unpack(versions[i])
+                local toVer, to = unpack(versions[j])
+
+                for k, testCase in ipairs(testCases) do
+                    local value, bytelen, cmp, earliest = unpack(testCase)
+                    if not earliest or (i >= earliest and j >= earliest) then
+                        check(k, fromVer, from, toVer, to, value, bytelen, cmp)
+                        check(k, toVer, to, fromVer, from, value, bytelen, cmp)
+                    end
+                end
+            end
+        end
     end
 
     -- Since all the above tests assume serialization success, try some failures now.

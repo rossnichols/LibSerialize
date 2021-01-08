@@ -3,3 +3,4 @@ ignore:
   - LICENSE
   - tests.lua
   - LibSerialize.toc
+  - archive/*
