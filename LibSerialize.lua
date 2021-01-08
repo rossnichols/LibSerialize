@@ -317,6 +317,10 @@ else
     LibSerialize = {}
 end
 
+-- Rev the serialization version when making a breaking change.
+-- Make sure to handle older versions properly within LibSerialize:DeserializeValue.
+local SERIALIZATION_VERSION = 1
+
 local assert = assert
 local error = error
 local pcall = pcall
@@ -1261,7 +1265,7 @@ function LibSerialize:SerializeEx(opts, ...)
     local WriteString, FlushWriter = CreateWriter()
 
     self._writeString = WriteString
-    self:_WriteByte(MINOR)
+    self:_WriteByte(SERIALIZATION_VERSION)
 
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
@@ -1300,7 +1304,7 @@ function LibSerialize:DeserializeValue(input)
     -- Since there's only one compression version currently,
     -- no extra work needs to be done to decode the data.
     local version = self:_ReadByte()
-    assert(version == MINOR)
+    assert(version == SERIALIZATION_VERSION)
 
     -- Since the objects we read may be nil, we need to explicitly
     -- track the number of results and assign by index so that we
