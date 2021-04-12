@@ -146,6 +146,30 @@ function LibSerialize:RunTests()
 
 
     --[[---------------------------------------------------------------------------
+        Test of Chunks Mode
+    --]]---------------------------------------------------------------------------
+    do
+        local t = { "test", [false] = {} }
+        t[ t[false] ] = "hello"
+        local co_handler = LibSerialize:SerializeChunks(t, "extra")
+        local ongoing, serialized
+        repeat
+            ongoing, serialized = co_handler()
+        until not ongoing
+    
+        local tab
+        co_handler = LibSerialize:DeserializeChunks(serialized)
+        repeat
+            ongoing, success, tab, str = co_handler()
+        until not ongoing
+    
+        assert(success)
+        assert(tab[1] == "test")
+        assert(tab[ tab[false] ] == "hello")
+        assert(str == "extra") 
+    end
+
+    --[[---------------------------------------------------------------------------
         Utilities
     --]]---------------------------------------------------------------------------
 
