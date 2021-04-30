@@ -146,19 +146,19 @@ function LibSerialize:RunTests()
 
 
     --[[---------------------------------------------------------------------------
-        Test of Chunks Mode
+        Test of Async Mode
     --]]---------------------------------------------------------------------------
     do
         local t = { "test", [false] = {} }
         t[ t[false] ] = "hello"
-        local co_handler = LibSerialize:SerializeChunks(t, "extra")
+        local co_handler = LibSerialize:SerializeAsync(t, "extra")
         local ongoing, serialized
         repeat
             ongoing, serialized = co_handler()
         until not ongoing
     
         local tab
-        co_handler = LibSerialize:DeserializeChunks(serialized)
+        co_handler = LibSerialize:DeserializeAsync(serialized)
         repeat
             ongoing, success, tab, str = co_handler()
         until not ongoing
@@ -210,8 +210,8 @@ function LibSerialize:RunTests()
         Test cases for serialization
     --]]---------------------------------------------------------------------------
 
-    local function fail(index, fromVer, toVer, value, desc)
-        assert(false, ("Test #%d failed (serialization ver: %s, deserialization ver: %s) (%s): %s"):format(index, fromVer, toVer, tostring(value), desc))
+    local function fail(index, fromVer, toVer, value, desc, async)
+        assert(false, ("Test #%d failed (serialization ver: %s, deserialization ver: %s, async: %s) (%s): %s"):format(index, fromVer, toVer, tostring(async), tostring(value), desc))
     end
 
     local function testfilter(t, k, v)
@@ -240,6 +240,26 @@ function LibSerialize:RunTests()
             fail(index, fromVer, toVer, value, "Non-matching deserialization result")
         elseif typ ~= "table" and value ~= deserialized then
             fail(index, fromVer, toVer, value, ("Non-matching deserialization result: %s"):format(tostring(deserialized)))
+        end
+
+        -- Async tests
+        if toVer == "latest" and fromVer == "latest" then
+            local co_handler = from:SerializeEx({ errorOnUnserializableType = false, filter = testfilter, asyncMode = true }, value)
+            local ongoing
+            repeat
+                ongoing, serialized = co_handler()
+            until not ongoing
+            if #serialized ~= bytelen then
+                fail(index, fromVer, toVer, value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen), true)
+            end
+
+            co_handler = to:DeserializeAsync(serialized)
+            repeat
+                ongoing, success = co_handler()
+            until not ongoing
+            if not success then
+                fail(index, fromVer, toVer, value, ("Deserialization failed: %s"):format(deserialized), true)
+            end
         end
     end
 

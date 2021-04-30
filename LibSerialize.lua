@@ -109,6 +109,8 @@ end
 
     Returns:
     * result: `...` serialized as a string
+    * OR if `opts.asyncMode` is `true` then returns `coroutine_handler` (see
+      `SerializeAsync()`)
 
 * **`LibSerialize:Serialize(...)`**
 
@@ -120,7 +122,7 @@ end
 
     Calls `SerializeEx(opts, ...)` with the default options (see below)
 
-* **`LibSerialize:SerializeChunks(...)`**
+* **`LibSerialize:SerializeAsync(...)`**
 
     Arguments:
     * `...`: a variable number of serializable values
@@ -132,26 +134,30 @@ end
       * `ongoing`: Boolean if there is more to process.
       * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default chunks mode options (see below)
+    Calls `SerializeEx(opts, ...)` with the default Async mode options (see below)
 
 * **`LibSerialize:Deserialize(input)`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
     * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
-* **`LibSerialize:DeserializeValue(input)`**
+* **`LibSerialize:DeserializeValue(input, opts)`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
 
-    Callback arguments:
+    Returns:
     * `...`: the deserialized value(s)
+    * OR if `opts.asyncMode` is `true` then returns `coroutine_handler` (see
+      `DeserializeAsync()`)
 
-* **`LibSerialize:DeserializeChunks(input)`**
+* **`LibSerialize:DeserializeAsync(input)`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
@@ -209,24 +215,24 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
-* `chunksMode`: `boolean` (default false)
+* `asyncMode`: `boolean` (default false)
   * `true`: the serialize function will return a coroutine handler to process
     the serialization. If true, the following additional options are considered:
-    * `yieldOnChunkSize`: `number` How large to allow the buffer before yielding
-    * `yieldOnChunkTime`: `number` Max duration between yields
+    * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
+    * `yieldOnElapsedTime`: `number` Max duration between yields
     * `timeFn`: `function` To return the time in `number` format relevant to the
       environment.
-  * `false`: the serialize function will return a the serialized string directly.
+  * `false`: the serialize function will return the serialized string directly.
 
 The following deserialization options are supported:
-* `chunksMode`: `boolean` (default false)
+* `asyncMode`: `boolean` (default false)
   * `true`: the serialize function will return a coroutine handler to process
     the serialization. If true, the following additional options are considered:
-    * `yieldOnChunkSize`: `number` How large to allow the buffer before yielding
-    * `yieldOnChunkTime`: `number` Max duration between yields
+    * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
+    * `yieldOnElapsedTime`: `number` Max duration between yields
     * `timeFn`: `function` To return the time in `number` format relevant to the
       environment.
-  * `false`: the serialize function will return a the serialized string directly.
+  * `false`: the serialize function will return the serialized string directly.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -308,19 +314,19 @@ the following possible keys:
     assert(tab.nested.c == nil)
     ```
 
-5. `LibSerialize:SerializeChunks()` serializes data in a coroutine which
+5. `LibSerialize:SerializeAsync()` serializes data in a coroutine which
     ease the stresses of some environments.
     ```lua
     local t = { "test", [false] = {} }
     t[ t[false] ] = "hello"
-    local co_handler = LibSerialize:SerializeChunks(t, "extra")
+    local co_handler = LibSerialize:SerializeAsync(t, "extra")
     local ongoing, serialized
     repeat
         ongoing, serialized = co_handler()
     until not ongoing
 
     local tab
-    co_handler = LibSerialize:DeserializeChunks(serialized)
+    co_handler = LibSerialize:DeserializeAsync(serialized)
     repeat
         ongoing, tab = co_handler()
     until not ongoing
@@ -328,7 +334,7 @@ the following possible keys:
     assert(success)
     assert(tab[1] == "test")
     assert(tab[ tab[false] ] == "hello")
-    assert(str == "extra") 
+    assert(str == "extra")
     ```
 
 
@@ -416,23 +422,25 @@ local string_sub = string.sub
 local table_concat = table.concat
 local table_insert = table.insert
 local table_sort = table.sort
-local table_pack = table.pack
-local table_unpack = table.unpack
 local coroutine_create = coroutine.create
 local coroutine_status = coroutine.status
 local coroutine_resume = coroutine.resume
 local coroutine_yield = coroutine.yield
 
 local defaultSerializeOptions = {
-  errorOnUnserializableType = true,
-  stable = false,
-  filter = nil,
-  chunksMode = false,
-  yieldOnChunkSize = 64 * 1024
+    errorOnUnserializableType = true,
+    stable = false,
+    filter = nil,
+    asyncMode = false
+}
+local defaultAsyncOptions = {
+    asyncMode = true,
+    yieldOnObjectCount = 4096,
+    timeFn = nil,
+    yieldOnElapsedTime = nil
 }
 local defaultDeserializeOptions = {
-  chunksMode = false,
-  yieldOnChunkSize = 64 * 1024
+    asyncMode = false
 }
 
 local canSerializeFnOptions = {
@@ -558,7 +566,7 @@ local function CreateWriter()
         bufferSize = 0
         return flushed
     end
-    
+
     return WriteString, FlushWriter
 end
 
@@ -712,7 +720,6 @@ end
 local LibSerializeInt = {}
 
 local function CreateSerializer(opts)
-    opts = opts or {}
     local state = {}
 
     -- Copy the state from LibSerializeInt.
@@ -733,8 +740,25 @@ local function CreateSerializer(opts)
     for k, v in pairs(defaultSerializeOptions) do
         state._opts[k] = v
     end
+    if opts.asyncMode then
+        for k, v in pairs(defaultAsyncOptions) do
+            state._opts[k] = v
+        end
+    end
     for k, v in pairs(opts) do
         state._opts[k] = v
+    end
+
+    if state._opts.asyncMode and state._opts.yieldOnElapsedTime and not state._opts.timeFn then
+        error("Async Mode operation with yieldOnElapsedTime requires timeFn option")
+    end
+
+    -- Initialize yield counters
+    if state._opts.yieldOnObjectCount ~= false then
+        state._currentObjectCount = 0
+    end
+    if state._opts.timeFn and state._opts.yieldOnElapsedTime then
+        state._currentElapsedTime = opts.timeFn
     end
 
     return state
@@ -761,8 +785,21 @@ local function CreateDeserializer(input, opts)
     for k, v in pairs(defaultDeserializeOptions) do
         state._opts[k] = v
     end
+    if opts.asyncMode then
+        for k, v in pairs(defaultAsyncOptions) do
+            state._opts[k] = v
+        end
+    end
     for k, v in pairs(opts) do
         state._opts[k] = v
+    end
+
+    -- Initialize yield counters
+    if state._opts.yieldOnObjectCount ~= false then
+        state._currentObjectCount = 0
+    end
+    if state._opts.timeFn and state._opts.yieldOnElapsedTime then
+        state._currentElapsedTime = opts.timeFn
     end
 
     return state
@@ -790,13 +827,16 @@ end
 function LibSerializeInt:_ReadObject()
     local value = self:_ReadByte()
 
-    self.currentSize = (self.currentSize or 0) + value/8
-    if self._opts.chunksMode and (
-        (self.currentTime and self._opts.timeFn() - self.currentTime > self._opts.yieldOnChunkTime)
-        or self.currentSize > self._opts.yieldOnChunkSize) then
-        if self._opts.timeFn then self.currentTime = self._opts.timeFn() end
-        self.currentSize = 0
-        coroutine_yield()
+    if self._opts.asyncMode then
+        if self._currentObjectCount then
+            self._currentObjectCount = self._currentObjectCount + 1
+        end
+        if (self._currentElapsedTime and self._opts.timeFn() - self._currentElapsedTime > self._opts.yieldOnElapsedTime)
+        or (self._currentObjectCount and self._currentObjectCount > self._opts.yieldOnObjectCount) then
+            if self._opts.timeFn then self._currentElapsedTime = self._opts.timeFn() end
+            if self._currentObjectCount then self._currentObjectCount = 0 end
+            coroutine_yield()
+        end
     end
 
     if value % 2 == 1 then
@@ -1065,14 +1105,16 @@ end
 -- Note that _GetWriteFn will raise a Lua error if it finds an
 -- unserializable type, unless this behavior is suppressed via options.
 function LibSerializeInt:_WriteObject(obj)
-    if self._opts.chunksMode and (
-        (self.currentTime and self._opts.timeFn() - self.currentTime > self._opts.yieldOnChunkTime)
-        or self.currentSize > self._opts.yieldOnChunkSize) then
-        if self._opts.timeFn then self.currentTime = self._opts.timeFn() end
-        self.currentSize = 0
-        coroutine_yield()
-    elseif self._opts.chunksMode then
-        self.currentSize = self.currentSize + 1
+    if self._opts.asyncMode then
+        if self._currentObjectCount then
+            self._currentObjectCount = self._currentObjectCount + 1
+        end
+        if (self._currentElapsedTime and self._opts.timeFn() - self._currentElapsedTime > self._opts.yieldOnElapsedTime)
+        or (self._currentObjectCount and self._currentObjectCount > self._opts.yieldOnObjectCount) then
+            if self._opts.timeFn then self._currentElapsedTime = self._opts.timeFn() end
+            if self._currentObjectCount then self._currentObjectCount = 0 end
+            coroutine_yield()
+        end
     end
 
     local writeFn = self:_GetWriteFn(obj)
@@ -1420,64 +1462,53 @@ function LibSerialize:IsSerializableType(...)
 end
 
 function LibSerialize:SerializeEx(opts, ...)
-    opts = opts or {}
-    
-    if opts.chunksMode and opts.yieldOnChunkTime and not opts.timeFn then
-        error("Chunks Mode operation with yieldOnChunkTime requires timeFn option")
-    end
     local ser = CreateSerializer(opts)
 
     ser:_WriteByte(SERIALIZATION_VERSION)
 
-    local operation = function(...)	
-        for i = 1, select("#", ...) do	
-            local input = select(i, ...)	
-            if not ser:_WriteObject(input) then	
-                -- An unserializable object was passed as an argument.	
-                -- Write nil into its slot so that we deserialize a	
-                -- consistent number of objects from the resulting string.	
-                ser:_WriteObject(nil)	
-            end	
-        end	
-        return ser._flushWriter()	
-      end
+    local operation = function(...)
+        for i = 1, select("#", ...) do
+            local input = select(i, ...)
+            if not ser:_WriteObject(input) then
+                -- An unserializable object was passed as an argument.
+                -- Write nil into its slot so that we deserialize a
+                -- consistent number of objects from the resulting string.
+                ser:_WriteObject(nil)
+            end
+        end
+        return ser._flushWriter()
+    end
 
-      if opts.chunksMode then	
-          if ser._opts.timeFn then	
-              ser.currentTime = ser._opts.timeFn()	
-          end	
-          ser.currentSize = 0	
-          local thread = coroutine_create(operation)	
-          local dots = {...}	
-          -- return coroutine handler	
-          return function()	
-              local co_success, result, x = coroutine_resume(thread, unpack(dots))	
-              if not co_success then	
-                  return false	
-              elseif coroutine_status(thread) ~= 'dead' then	
-                  return true	
-              elseif not result then
-                  return false	
-              else
-                  return false, result	
-              end	
-        end	
-    else	
-        return operation(...)	
-    end    
+    if ser._opts.asyncMode then
+        local thread = coroutine_create(operation)
+        local dots = {...}
+        -- return coroutine handler
+        return function()
+            local co_success, result = coroutine_resume(thread, unpack(dots))
+            if not co_success then
+                error('Coroutine failed')
+            elseif coroutine_status(thread) ~= 'dead' then
+                return true
+            else
+                return false, result
+            end
+        end
+    else
+        return operation(...)
+    end
 end
 
-function LibSerialize:SerializeChunks(...)
-  return self:SerializeEx({chunksMode=true}, ...)
+function LibSerialize:SerializeAsync(...)
+    return self:SerializeEx(defaultAsyncOptions, ...)
 end
 
 function LibSerialize:Serialize(...)
-    return self:SerializeEx(defaultOptions, ...)
+    return self:SerializeEx(defaultSerializeOptions, ...)
 end
 
 function LibSerialize:DeserializeValue(input, opts)
-    if opts and opts.chunksMode and opts.yieldOnChunkTime and not opts.timeFn then
-        error("Chunks Mode operation with yieldOnChunkTime requires timeFn option")
+    if opts and opts.asyncMode and opts.yieldOnElapsedTime and not opts.timeFn then
+        error("Async Mode operation with yieldOnElapsedTime requires timeFn option")
     end
 
     local deser = CreateDeserializer(input, opts or {})
@@ -1493,46 +1524,42 @@ function LibSerialize:DeserializeValue(input, opts)
     local output = {}
     local outputSize = 0
 
-    local operation = function()	
-        while deser._readerBytesLeft() > 0 do	
-            outputSize = outputSize + 1	
-            output[outputSize] = deser:_ReadObject()	
-        end	
+    local operation = function()
+        while deser._readerBytesLeft() > 0 do
+            outputSize = outputSize + 1
+            output[outputSize] = deser:_ReadObject()
+        end
 
-        if deser._readerBytesLeft() < 0 then	
-            error("Reader went past end of input")	
-        end	
+        if deser._readerBytesLeft() < 0 then
+            error("Reader went past end of input")
+        end
 
-        return unpack(output, 1, outputSize)	
-    end	
-    if opts and opts.chunksMode then	
-        if opts.timeFn then	
-            deser.currentTime = opts.timeFn()	
-        end	
-        deser.currentSize = 0	
-        local thread = coroutine_create(operation)	
-        -- return coroutine handler	
-        return function()	
-            local values = {coroutine_resume(thread)}	
-            if not values[1] then	
-                return false	
-            elseif coroutine_status(thread) ~= 'dead' then	
-                return true	
-            else	
-                return false, unpack(values)	
-            end	
-        end	
-    else	
-        return operation()	
-    end   
+        return unpack(output, 1, outputSize)
+    end
+    if opts and opts.asyncMode then
+        local thread = coroutine_create(operation)
+        -- return coroutine handler
+        return function()
+            local values = {coroutine_resume(thread)}
+            if not values[1] then
+                error('Coroutine failed')
+            elseif coroutine_status(thread) ~= 'dead' then
+                return true
+            else
+                return false, unpack(values)
+            end
+        end
+    else
+        return operation()
+    end
 end
 
 function LibSerialize:Deserialize(input)
     return pcall(self.DeserializeValue, self, input)
 end
 
-function LibSerialize:DeserializeChunks(input)
-  return self:DeserializeValue(input, {chunksMode = true})
+function LibSerialize:DeserializeAsync(input)
+    return self:DeserializeValue(input, defaultAsyncOptions)
 end
 
 return LibSerialize
