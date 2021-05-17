@@ -109,8 +109,6 @@ end
 
     Returns:
     * result: `...` serialized as a string
-    * OR if `opts.asyncMode` is `true` then returns `coroutine_handler` (see
-      `SerializeAsync()`)
 
 * **`LibSerialize:Serialize(...)`**
 
@@ -122,19 +120,32 @@ end
 
     Calls `SerializeEx(opts, ...)` with the default options (see below)
 
+* **`LibSerialize:SerializeAsyncEx(opts, ...)`**
+
+    Arguments:
+    * `opts`: options (see below)
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `ongoing`: Boolean if there is more to process.
+      * `result`: `...` serialized as a string
+
 * **`LibSerialize:SerializeAsync(...)`**
 
     Arguments:
     * `...`: a variable number of serializable values
 
     Returns:
-    * `coroutine_handler`: function to run the routine. This
-      should be run until the first returned value is false.
-      `coroutine_handler` returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
       * `ongoing`: Boolean if there is more to process.
       * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default Async mode options (see below)
+    Calls `SerializeAsyncEx(opts, ...)` with the default options (see below)
 
 * **`LibSerialize:Deserialize(input)`**
 
@@ -154,8 +165,6 @@ end
 
     Returns:
     * `...`: the deserialized value(s)
-    * OR if `opts.asyncMode` is `true` then returns `coroutine_handler` (see
-      `DeserializeAsync()`)
 
 * **`LibSerialize:DeserializeAsync(input)`**
 
@@ -163,10 +172,22 @@ end
     * `input`: a string previously returned from `LibSerialize:Serialize()`
 
     Returns:
-    * `coroutine_handler`: function to run the routine. This
-      should be run until the first returned value is false. The remaining
-      return values match `Deserialize()`.
-      `coroutine_handler` returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false. The remaining return values match `Deserialize()`.
+      `handler` returns:
+      * `success`: a boolean indicating if deserialization was successful
+      * `...`: the deserialized value(s), or a string containing the encountered Lua error
+
+* **`LibSerialize:DeserializeAsyncValue(input, opts)`**
+
+    Arguments:
+    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false. The remaining return values match `Deserialize()`.
+      `handler` returns:
       * `success`: a boolean indicating if deserialization was successful
       * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
@@ -215,24 +236,17 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
-* `asyncMode`: `boolean` (default false)
-  * `true`: the serialize function will return a coroutine handler to process
-    the serialization. If true, the following additional options are considered:
-    * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
-    * `yieldOnElapsedTime`: `number` Max duration between yields
-    * `timeFn`: `function` To return the time in `number` format relevant to the
-      environment.
-  * `false`: the serialize function will return the serialized string directly.
+When using `SerializeAsyncEx()`, these additional options are supported:
+  * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
+  * `yieldOnElapsedTime`: `number` Max duration between yields
+  * `timeFn`: `function` To return the time in `number` format relevant to the
+    environment.
 
-The following deserialization options are supported:
-* `asyncMode`: `boolean` (default false)
-  * `true`: the serialize function will return a coroutine handler to process
-    the serialization. If true, the following additional options are considered:
-    * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
-    * `yieldOnElapsedTime`: `number` Max duration between yields
-    * `timeFn`: `function` To return the time in `number` format relevant to the
-      environment.
-  * `false`: the serialize function will return the serialized string directly.
+The following deserialization options are supported with `DeserializeAsync`:
+  * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
+  * `yieldOnElapsedTime`: `number` Max duration between yields
+  * `timeFn`: `function` To return the time in `number` format relevant to the
+    environment.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -430,17 +444,14 @@ local coroutine_yield = coroutine.yield
 local defaultSerializeOptions = {
     errorOnUnserializableType = true,
     stable = false,
-    filter = nil,
-    asyncMode = false
+    filter = nil
 }
 local defaultAsyncOptions = {
-    asyncMode = true,
     yieldOnObjectCount = 4096,
     timeFn = nil,
     yieldOnElapsedTime = nil
 }
 local defaultDeserializeOptions = {
-    asyncMode = false
 }
 
 local canSerializeFnOptions = {
@@ -719,7 +730,7 @@ end
 
 local LibSerializeInt = {}
 
-local function CreateSerializer(opts)
+local function CreateSerializer(opts, asyncMode)
     local state = {}
 
     -- Copy the state from LibSerializeInt.
@@ -740,7 +751,8 @@ local function CreateSerializer(opts)
     for k, v in pairs(defaultSerializeOptions) do
         state._opts[k] = v
     end
-    if opts.asyncMode then
+    if asyncMode then
+        state._async = true
         for k, v in pairs(defaultAsyncOptions) do
             state._opts[k] = v
         end
@@ -749,22 +761,18 @@ local function CreateSerializer(opts)
         state._opts[k] = v
     end
 
-    if state._opts.asyncMode and state._opts.yieldOnElapsedTime and not state._opts.timeFn then
-        error("Async Mode operation with yieldOnElapsedTime requires timeFn option")
-    end
-
     -- Initialize yield counters
     if state._opts.yieldOnObjectCount ~= false then
         state._currentObjectCount = 0
     end
     if state._opts.timeFn and state._opts.yieldOnElapsedTime then
-        state._currentElapsedTime = opts.timeFn
+        state._currentElapsedTime = opts.timeFn()
     end
 
     return state
 end
 
-local function CreateDeserializer(input, opts)
+local function CreateDeserializer(input, opts, asyncMode)
     local state = {}
 
     -- Copy the state from LibSerializeInt.
@@ -785,7 +793,8 @@ local function CreateDeserializer(input, opts)
     for k, v in pairs(defaultDeserializeOptions) do
         state._opts[k] = v
     end
-    if opts.asyncMode then
+    if asyncMode then
+        state._async = true
         for k, v in pairs(defaultAsyncOptions) do
             state._opts[k] = v
         end
@@ -799,7 +808,7 @@ local function CreateDeserializer(input, opts)
         state._currentObjectCount = 0
     end
     if state._opts.timeFn and state._opts.yieldOnElapsedTime then
-        state._currentElapsedTime = opts.timeFn
+        state._currentElapsedTime = opts.timeFn()
     end
 
     return state
@@ -827,13 +836,17 @@ end
 function LibSerializeInt:_ReadObject()
     local value = self:_ReadByte()
 
-    if self._opts.asyncMode then
+    if self._async then
         if self._currentObjectCount then
             self._currentObjectCount = self._currentObjectCount + 1
         end
-        if (self._currentElapsedTime and self._opts.timeFn() - self._currentElapsedTime > self._opts.yieldOnElapsedTime)
-        or (self._currentObjectCount and self._currentObjectCount > self._opts.yieldOnObjectCount) then
-            if self._opts.timeFn then self._currentElapsedTime = self._opts.timeFn() end
+        local elapsedTime
+        if self._currentElapsedTime and self._opts.timeFn then
+            elapsedTime = self._opts.timeFn()
+        end
+        if (elapsedTime and elapsedTime - self._currentElapsedTime > self._opts.yieldOnElapsedTime) or
+        (self._currentObjectCount and self._currentObjectCount > self._opts.yieldOnObjectCount) then
+            if elapsedTime then self._currentElapsedTime = elapsedTime end
             if self._currentObjectCount then self._currentObjectCount = 0 end
             coroutine_yield()
         end
@@ -1105,13 +1118,17 @@ end
 -- Note that _GetWriteFn will raise a Lua error if it finds an
 -- unserializable type, unless this behavior is suppressed via options.
 function LibSerializeInt:_WriteObject(obj)
-    if self._opts.asyncMode then
+    if self._async then
         if self._currentObjectCount then
             self._currentObjectCount = self._currentObjectCount + 1
         end
-        if (self._currentElapsedTime and self._opts.timeFn() - self._currentElapsedTime > self._opts.yieldOnElapsedTime)
-        or (self._currentObjectCount and self._currentObjectCount > self._opts.yieldOnObjectCount) then
-            if self._opts.timeFn then self._currentElapsedTime = self._opts.timeFn() end
+        local elapsedTime
+        if self._currentElapsedTime and self._opts.timeFn then
+            elapsedTime = self._opts.timeFn()
+        end
+        if (elapsedTime and elapsedTime - self._currentElapsedTime > self._opts.yieldOnElapsedTime) or
+        (self._currentObjectCount and self._currentObjectCount > self._opts.yieldOnObjectCount) then
+            if elapsedTime then self._currentElapsedTime = elapsedTime end
             if self._currentObjectCount then self._currentObjectCount = 0 end
             coroutine_yield()
         end
@@ -1461,58 +1478,57 @@ function LibSerialize:IsSerializableType(...)
     return serializeTester:_CanSerialize(canSerializeFnOptions, ...)
 end
 
-function LibSerialize:SerializeEx(opts, ...)
-    local ser = CreateSerializer(opts)
-
+local function serializeOperation(ser, ...)
     ser:_WriteByte(SERIALIZATION_VERSION)
-
-    local operation = function(...)
-        for i = 1, select("#", ...) do
-            local input = select(i, ...)
-            if not ser:_WriteObject(input) then
-                -- An unserializable object was passed as an argument.
-                -- Write nil into its slot so that we deserialize a
-                -- consistent number of objects from the resulting string.
-                ser:_WriteObject(nil)
-            end
+    for i = 1, select("#", ...) do
+        local input = select(i, ...)
+        if not ser:_WriteObject(input) then
+            -- An unserializable object was passed as an argument.
+            -- Write nil into its slot so that we deserialize a
+            -- consistent number of objects from the resulting string.
+            ser:_WriteObject(nil)
         end
-        return ser._flushWriter()
     end
 
-    if ser._opts.asyncMode then
-        local thread = coroutine_create(operation)
-        local dots = {...}
-        -- return coroutine handler
-        return function()
-            local co_success, result = coroutine_resume(thread, unpack(dots))
-            if not co_success then
-                error('Coroutine failed')
-            elseif coroutine_status(thread) ~= 'dead' then
-                return true
-            else
-                return false, result
-            end
+    return ser._flushWriter()
+end
+
+function LibSerialize:SerializeEx(opts, ...)
+    local ser = CreateSerializer(opts)
+    return serializeOperation(ser, ...)
+end
+
+function LibSerialize:SerializeAsyncEx(opts, ...)
+    local ser = CreateSerializer(opts, true)
+
+    if opts.yieldOnElapsedTime and not opts.timeFn then
+        error("Async Mode operation with yieldOnElapsedTime requires timeFn option")
+    end
+
+    local thread = coroutine_create(serializeOperation)
+    local dots = {...}
+    -- return coroutine handler
+    return function()
+        local co_success, result = coroutine_resume(thread, ser, unpack(dots))
+        if not co_success then
+            error(result)
+        elseif coroutine_status(thread) ~= 'dead' then
+            return true
+        else
+            return false, result
         end
-    else
-        return operation(...)
     end
 end
 
 function LibSerialize:SerializeAsync(...)
-    return self:SerializeEx(defaultAsyncOptions, ...)
+    return self:SerializeAsyncEx(defaultAsyncOptions, ...)
 end
 
 function LibSerialize:Serialize(...)
     return self:SerializeEx(defaultSerializeOptions, ...)
 end
 
-function LibSerialize:DeserializeValue(input, opts)
-    if opts and opts.asyncMode and opts.yieldOnElapsedTime and not opts.timeFn then
-        error("Async Mode operation with yieldOnElapsedTime requires timeFn option")
-    end
-
-    local deser = CreateDeserializer(input, opts or {})
-
+local function deserializeOperation(deser)
     -- Since there's only one compression version currently,
     -- no extra work needs to be done to decode the data.
     local version = deser:_ReadByte()
@@ -1524,42 +1540,51 @@ function LibSerialize:DeserializeValue(input, opts)
     local output = {}
     local outputSize = 0
 
-    local operation = function()
-        while deser._readerBytesLeft() > 0 do
-            outputSize = outputSize + 1
-            output[outputSize] = deser:_ReadObject()
-        end
-
-        if deser._readerBytesLeft() < 0 then
-            error("Reader went past end of input")
-        end
-
-        return unpack(output, 1, outputSize)
+    while deser._readerBytesLeft() > 0 do
+        outputSize = outputSize + 1
+        output[outputSize] = deser:_ReadObject()
     end
-    if opts and opts.asyncMode then
-        local thread = coroutine_create(operation)
-        -- return coroutine handler
-        return function()
-            local values = {coroutine_resume(thread)}
-            if not values[1] then
-                error('Coroutine failed')
-            elseif coroutine_status(thread) ~= 'dead' then
-                return true
-            else
-                return false, unpack(values)
-            end
-        end
-    else
-        return operation()
+
+    if deser._readerBytesLeft() < 0 then
+        error("Reader went past end of input")
     end
+
+    return unpack(output, 1, outputSize)
+end
+
+function LibSerialize:DeserializeValue(input, opts)
+    local deser = CreateDeserializer(input, opts or {})
+    return deserializeOperation(deser)
+end
+
+function LibSerialize:DeserializeAsyncValue(input, opts)
+    if opts.yieldOnElapsedTime and not opts.timeFn then
+        error("Async Mode operation with yieldOnElapsedTime requires timeFn option")
+    end
+
+    local deser = CreateDeserializer(input, opts or {}, true)
+
+    local thread = coroutine_create(deserializeOperation)
+    -- return coroutine handler
+    return function()
+        local values = {coroutine_resume(thread, deser)}
+        if not values[1] then
+            error(values[2])
+        elseif coroutine_status(thread) ~= 'dead' then
+            return true
+        else
+            return false, unpack(values)
+        end
+    end
+
 end
 
 function LibSerialize:Deserialize(input)
     return pcall(self.DeserializeValue, self, input)
 end
 
-function LibSerialize:DeserializeAsync(input)
-    return self:DeserializeValue(input, defaultAsyncOptions)
+function LibSerialize:DeserializeAsync(input, opts)
+    return self:DeserializeAsyncValue(input, opts)
 end
 
 return LibSerialize

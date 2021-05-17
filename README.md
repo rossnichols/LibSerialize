@@ -62,12 +62,12 @@ function MyAddon:OnCommReceived(prefix, payload, distribution, sender)
     -- Handle `data`
 end
 
--- Chunks Mode - Used in WoW to prevent locking the game while processing.
+-- Async Mode - Used in WoW to prevent locking the game while processing.
 -- Serialize data:
-local processing = CreateFrame('frame')
-local co_handler = LibSerialize:SerializeChunks(tbl)
+local processing = CreateFrame('Frame')
+local handler = LibSerialize:SerializeAsync(tbl)
 processing:SetScript('OnUpdate', function()
-    local ongoing, serialized = co_handler()
+    local ongoing, serialized = handler()
     if not ongoing then
     processing:SetScript('OnUpdate', nil)
         -- Do something with `serialized`
@@ -75,9 +75,9 @@ processing:SetScript('OnUpdate', function()
 end)
 
 -- Deserialize data:
-local co_handler = LibSerialize:DeserializeChunks(str)
+local handler = LibSerialize:DeserializeAsync(str)
 processing:SetScript('OnUpdate', function()
-    local ongoing, success, deserialized = co_handler()
+    local ongoing, success, deserialized = handler()
     if not ongoing then
     processing:SetScript('OnUpdate', nil)
         -- Do something with `deserialized`
@@ -105,19 +105,32 @@ end)
 
     Calls `SerializeEx(opts, ...)` with the default options (see below)
 
-* **`LibSerialize:SerializeChunks(...)`**
+* **`LibSerialize:SerializeAsyncEx(opts, ...)`**
+
+    Arguments:
+    * `opts`: options (see below)
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `ongoing`: Boolean if there is more to process.
+      * `result`: `...` serialized as a string
+
+* **`LibSerialize:SerializeAsync(...)`**
 
     Arguments:
     * `...`: a variable number of serializable values
 
     Returns:
-    * `coroutine_handler`: function to run the routine. This
-      should be run until the first returned value is false.
-      `coroutine_handler` returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
       * `ongoing`: Boolean if there is more to process.
       * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default chunks mode options (see below)
+    Calls `SerializeAsyncEx(opts, ...)` with the default options (see below)
 
 * **`LibSerialize:Deserialize(input)`**
 
@@ -128,18 +141,6 @@ end)
     * `success`: a boolean indicating if deserialization was successful
     * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
-* **`LibSerialize:DeserializeChunks(input)`**
-
-    Arguments:
-    * `input`: a string previously returned from `LibSerialize:Serialize()`
-
-    Returns:
-    * `coroutine_handler`: function to run the routine. This
-      should be run until the first returned value is false.
-      `coroutine_handler` returns:
-      * `success`: a boolean indicating if deserialization was successful
-      * `...`: the deserialized value(s), or a string containing the encountered Lua error
-
 * **`LibSerialize:DeserializeValue(input)`**
 
     Arguments:
@@ -147,6 +148,31 @@ end)
 
     Returns:
     * `...`: the deserialized value(s)
+
+* **`LibSerialize:DeserializeAsync(input)`**
+
+    Arguments:
+    * `input`: a string previously returned from `LibSerialize:Serialize()`
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false. The remaining return values match `Deserialize()`.
+      `handler` returns:
+      * `success`: a boolean indicating if deserialization was successful
+      * `...`: the deserialized value(s), or a string containing the encountered Lua error
+
+* **`LibSerialize:DeserializeAsyncValue(input, opts)`**
+
+    Arguments:
+    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false. The remaining return values match `Deserialize()`.
+      `handler` returns:
+      * `success`: a boolean indicating if deserialization was successful
+      * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
 * **`LibSerialize:IsSerializableType(...)`**
 
@@ -193,14 +219,17 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
-* `chunksMode`: `boolean` (default false)
-  * `true`: the serialize function will return a coroutine handler to process
-    the serialization. If true, the following additional options are considered:
-    * `yieldOnChunkSize`: `number` How large to allow the buffer before yielding
-    * `yieldOnChunkTime`: `number` Max duration between yields
-    * `timeFn`: `function` To return the time in `number` format relevant to the
-      environment.
-  * `false`: the serialize function will return a the serialized string directly.
+When using `SerializeAsyncEx()`, these additional options are supported:
+  * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
+  * `yieldOnElapsedTime`: `number` Max duration between yields
+  * `timeFn`: `function` To return the time in `number` format relevant to the
+    environment.
+
+The following deserialization options are supported with `DeserializeAsync`:
+  * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
+  * `yieldOnElapsedTime`: `number` Max duration between yields
+  * `timeFn`: `function` To return the time in `number` format relevant to the
+    environment.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -282,28 +311,28 @@ the following possible keys:
     assert(tab.nested.c == nil)
     ```
 
-5. `LibSerialize:SerializeChunks()` returns a coroutine handler which mimics 
+5. `LibSerialize:SerializeAsync()` returns a handler which mimics
     `LibSerialize:Serialize()`, but with a first returned boolean if the process
     should continue or not.
     ```lua
     local t = { "test", [false] = {} }
     t[ t[false] ] = "hello"
-    local co_handler = LibSerialize:SerializeChunks(t, "extra")
+    local handler = LibSerialize:SerializeAsync(t, "extra")
     local ongoing, serialized
     repeat
         ongoing, serialized = co_handler()
     until not ongoing
 
     local tab
-    co_handler = LibSerialize:DeserializeChunks(serialized)
+    handler = LibSerialize:DeserializeAsync(serialized)
     repeat
-        ongoing, tab = co_handler()
+        ongoing, tab = handler()
     until not ongoing
 
     assert(success)
     assert(tab[1] == "test")
     assert(tab[ tab[false] ] == "hello")
-    assert(str == "extra") 
+    assert(str == "extra")
     ```
 
 ## Encoding format:

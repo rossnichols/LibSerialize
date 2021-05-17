@@ -151,22 +151,22 @@ function LibSerialize:RunTests()
     do
         local t = { "test", [false] = {} }
         t[ t[false] ] = "hello"
-        local co_handler = LibSerialize:SerializeAsync(t, "extra")
+        local co_handler = LibSerialize:SerializeAsyncEx({ yieldOnObjectCount = 1 }, t, "extra")
         local ongoing, serialized
         repeat
             ongoing, serialized = co_handler()
         until not ongoing
-    
+
         local tab
-        co_handler = LibSerialize:DeserializeAsync(serialized)
+        co_handler = LibSerialize:DeserializeAsync(serialized, { yieldOnObjectCount = 1 })
         repeat
             ongoing, success, tab, str = co_handler()
         until not ongoing
-    
+
         assert(success)
         assert(tab[1] == "test")
         assert(tab[ tab[false] ] == "hello")
-        assert(str == "extra") 
+        assert(str == "extra")
     end
 
     --[[---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ function LibSerialize:RunTests()
 
         -- Async tests
         if toVer == "latest" and fromVer == "latest" then
-            local co_handler = from:SerializeEx({ errorOnUnserializableType = false, filter = testfilter, asyncMode = true }, value)
+            local co_handler = from:SerializeAsyncEx({ errorOnUnserializableType = false, filter = testfilter, yieldOnObjectCount = 4 }, value)
             local ongoing
             repeat
                 ongoing, serialized = co_handler()
@@ -253,12 +253,25 @@ function LibSerialize:RunTests()
                 fail(index, fromVer, toVer, value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen), true)
             end
 
-            co_handler = to:DeserializeAsync(serialized)
+            co_handler = to:DeserializeAsync(serialized, { yieldOnObjectCount = 1 })
             repeat
-                ongoing, success = co_handler()
+                ongoing, success, deserialized = co_handler()
             until not ongoing
             if not success then
                 fail(index, fromVer, toVer, value, ("Deserialization failed: %s"):format(deserialized), true)
+            end
+
+            -- Tests involving NaNs will be compared in string form.
+            if type(value) == "number" and isnan(value) then
+                value = tostring(value)
+                deserialized = tostring(deserialized)
+            end
+
+            local typ = type(value)
+            if typ == "table" and not tCompare(cmp or value, deserialized) then
+                fail(index, fromVer, toVer, value, "Non-matching deserialization result")
+            elseif typ ~= "table" and value ~= deserialized then
+                fail(index, fromVer, toVer, value, ("Non-matching deserialization result: %s"):format(tostring(deserialized)))
             end
         end
     end
@@ -353,10 +366,10 @@ function LibSerialize:RunTests()
 
     if require then
         local versions = {
-            { "v1.0.0", require("archive\\LibSerialize-v1-0-0") },
-            { "v1.1.0", require("archive\\LibSerialize-v1-1-0") },
+            { "v1.0.0", require("archive/LibSerialize-v1-0-0") },
+            { "v1.1.0", require("archive/LibSerialize-v1-1-0") },
             -- v1.1.1 skipped due to bug with serialization version causing known failures.
-            { "v1.1.2", require("archive\\LibSerialize-v1-1-2") },
+            { "v1.1.2", require("archive/LibSerialize-v1-1-2") },
             { "latest", LibSerialize },
         }
 
