@@ -67,22 +67,24 @@ end
 local processing = CreateFrame('Frame')
 local handler = LibSerialize:SerializeAsync(tbl)
 processing:SetScript('OnUpdate', function()
-    local ongoing, serialized = handler()
-    if not ongoing then
-    processing:SetScript('OnUpdate', nil)
-        -- Do something with `serialized`
+    local completed, serialized = handler()
+    if completed then
+        processing:SetScript('OnUpdate', nil)
+            -- Do something with `serialized`
+        end
     end
-end)
+)
 
 -- Deserialize data:
 local handler = LibSerialize:DeserializeAsync(str)
 processing:SetScript('OnUpdate', function()
-    local ongoing, success, deserialized = handler()
-    if not ongoing then
-    processing:SetScript('OnUpdate', nil)
-        -- Do something with `deserialized`
+    local completed, success, deserialized = handler()
+    if completed then
+        processing:SetScript('OnUpdate', nil)
+            -- Do something with `deserialized`
+        end
     end
-end)
+)
 
 
 ## API:
@@ -115,7 +117,7 @@ end)
     * `handler`: function to run the process. This should be run until the
       first returned value is false.
       `handler` returns:
-      * `ongoing`: Boolean if there is more to process.
+      * `completed`: Boolean: true if finished, false if there is more to process.
       * `result`: `...` serialized as a string
 
 * **`LibSerialize:SerializeAsync(...)`**
@@ -127,7 +129,7 @@ end)
     * `handler`: function to run the process. This should be run until the
       first returned value is false.
       `handler` returns:
-      * `ongoing`: Boolean if there is more to process.
+      * `completed`: Boolean: true if finished, false if there is more to process.
       * `result`: `...` serialized as a string
 
     Calls `SerializeAsyncEx(opts, ...)` with the default options (see below)
@@ -150,18 +152,6 @@ end)
     * `...`: the deserialized value(s)
 
 * **`LibSerialize:DeserializeAsync(input)`**
-
-    Arguments:
-    * `input`: a string previously returned from `LibSerialize:Serialize()`
-
-    Returns:
-    * `handler`: function to run the process. This should be run until the
-      first returned value is false. The remaining return values match `Deserialize()`.
-      `handler` returns:
-      * `success`: a boolean indicating if deserialization was successful
-      * `...`: the deserialized value(s), or a string containing the encountered Lua error
-
-* **`LibSerialize:DeserializeAsyncValue(input, opts)`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
@@ -219,17 +209,13 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
-When using `SerializeAsyncEx()`, these additional options are supported:
-  * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
-  * `yieldOnElapsedTime`: `number` Max duration between yields
-  * `timeFn`: `function` To return the time in `number` format relevant to the
-    environment.
+When using `SerializeAsyncEx()`, this additional option is supported:
+  * `yieldCheckFn`: `function` Called at each object, return true to yield
+    See `defaultYieldCheckFn` for an example to yield on object count.
 
-The following deserialization options are supported with `DeserializeAsync`:
-  * `yieldOnObjectCount`: `number` How large to allow the buffer before yielding
-  * `yieldOnElapsedTime`: `number` Max duration between yields
-  * `timeFn`: `function` To return the time in `number` format relevant to the
-    environment.
+The following deserialization option is supported with `DeserializeAsync`:
+  * `yieldCheckFn`: `function` Called at each object, return true to yield
+    See `defaultYieldCheckFn` for an example to yield on object count.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -318,16 +304,16 @@ the following possible keys:
     local t = { "test", [false] = {} }
     t[ t[false] ] = "hello"
     local handler = LibSerialize:SerializeAsync(t, "extra")
-    local ongoing, serialized
+    local completed, serialized
     repeat
-        ongoing, serialized = co_handler()
-    until not ongoing
+        completed, serialized = co_handler()
+    until completed
 
     local tab
     handler = LibSerialize:DeserializeAsync(serialized)
     repeat
-        ongoing, tab = handler()
-    until not ongoing
+        completed, tab = handler()
+    until completed
 
     assert(success)
     assert(tab[1] == "test")
