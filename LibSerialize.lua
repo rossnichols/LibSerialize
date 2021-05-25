@@ -120,10 +120,38 @@ end
 
     Calls `SerializeEx(opts, ...)` with the default options (see below)
 
+* **`LibSerialize:SerializeAsyncEx(opts, ...)`**
+
+    Arguments:
+    * `opts`: options (see below)
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `completed`: Boolean: true if finished, false if there is more to process.
+      * `result`: `...` serialized as a string
+
+* **`LibSerialize:SerializeAsync(...)`**
+
+    Arguments:
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `completed`: Boolean: true if finished, false if there is more to process.
+      * `result`: `...` serialized as a string
+
+    Calls `SerializeAsyncEx(opts, ...)` with the default options (see below)
+
 * **`LibSerialize:Deserialize(input)`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
@@ -133,9 +161,23 @@ end
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
 
     Returns:
     * `...`: the deserialized value(s)
+
+* **`LibSerialize:DeserializeAsync(input, opts)`**
+
+    Arguments:
+    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false. The remaining return values match `Deserialize()`.
+      `handler` returns:
+      * `success`: a boolean indicating if deserialization was successful
+      * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
 * **`LibSerialize:IsSerializableType(...)`**
 
@@ -182,6 +224,13 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
+When using `SerializeAsyncEx()`, this additional option is supported:
+  * `yieldCheckFn`: `function` Called at each object, return true to yield
+    See `defaultYieldCheckFn` for an example to yield on object count.
+
+The following deserialization option is supported with `DeserializeAsync`:
+  * `yieldCheckFn`: `function` Called at each object, return true to yield
+    See `defaultYieldCheckFn` for an example to yield on object count.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -263,6 +312,29 @@ the following possible keys:
     assert(tab.nested.c == nil)
     ```
 
+5. `LibSerialize:SerializeAsync()` serializes data in a coroutine which
+    ease the stresses of some environments.
+    ```lua
+    local t = { "test", [false] = {} }
+    t[ t[false] ] = "hello"
+    local co_handler = LibSerialize:SerializeAsync(t, "extra")
+    local completed, serialized
+    repeat
+        completed, serialized = co_handler()
+    until completed
+
+    local tab
+    co_handler = LibSerialize:DeserializeAsync(serialized)
+    repeat
+        completed, tab = co_handler()
+    until completed
+
+    assert(success)
+    assert(tab[1] == "test")
+    assert(tab[ tab[false] ] == "hello")
+    assert(str == "extra")
+    ```
+
 
 ## Encoding format:
 Every object is encoded as a type byte followed by type-dependent payload.
@@ -308,7 +380,7 @@ The type byte uses the following formats to implement the above:
     * Followed by the type-dependent payload, including count(s) if needed
 --]]
 
-local MAJOR, MINOR = "LibSerialize", 4
+local MAJOR, MINOR = "LibSerialize", 5
 local LibSerialize
 if LibStub then
     LibSerialize = LibStub:NewLibrary(MAJOR, MINOR)
@@ -348,12 +420,24 @@ local string_sub = string.sub
 local table_concat = table.concat
 local table_insert = table.insert
 local table_sort = table.sort
+local coroutine_create = coroutine.create
+local coroutine_status = coroutine.status
+local coroutine_resume = coroutine.resume
+local coroutine_yield = coroutine.yield
 
-local defaultOptions = {
+local defaultSerializeOptions = {
     errorOnUnserializableType = true,
     stable = false,
-    filter = nil,
+    filter = nil
 }
+local defaultYieldCheckFn = function(self)
+    self._currentObjectCount = self._currentObjectCount or 0
+    if self._currentObjectCount > 4096 then
+        self._currentObjectCount = 0
+        return true
+    end
+    self._currentObjectCount = self._currentObjectCount + 1
+end
 
 local canSerializeFnOptions = {
     errorOnUnserializableType = false
@@ -468,7 +552,7 @@ local function CreateWriter()
 
     -- Write the entire string into the writer.
     local function WriteString(str)
-        -- DebugPrint("Writing string:", str, #str)
+        -- DebugPrint("Writing string:", str, #str, bufferSize)
         bufferSize = bufferSize + 1
         buffer[bufferSize] = str
     end
@@ -632,7 +716,7 @@ end
 
 local LibSerializeInt = {}
 
-local function CreateSerializer(opts)
+local function CreateSerializer(opts, asyncMode)
     local state = {}
 
     -- Copy the state from LibSerializeInt.
@@ -650,17 +734,39 @@ local function CreateSerializer(opts)
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
     state._opts = {}
-    for k, v in pairs(defaultOptions) do
+    for k, v in pairs(defaultSerializeOptions) do
         state._opts[k] = v
     end
+    if asyncMode then
+        state._async = true
+        state._yieldCheckFn = opts.yieldCheckFn or defaultYieldCheckFn
+    end
+    opts = opts or {}
     for k, v in pairs(opts) do
-        state._opts[k] = v
+        if k ~= "yieldCheckFn" then
+            state._opts[k] = v
+        end
     end
 
     return state
 end
 
-local function CreateDeserializer(input)
+local function serializeOperation(ser, ...)
+    ser:_WriteByte(SERIALIZATION_VERSION)
+    for i = 1, select("#", ...) do
+        local input = select(i, ...)
+        if not ser:_WriteObject(input) then
+            -- An unserializable object was passed as an argument.
+            -- Write nil into its slot so that we deserialize a
+            -- consistent number of objects from the resulting string.
+            ser:_WriteObject(nil)
+        end
+    end
+
+    return ser._flushWriter()
+end
+
+local function CreateDeserializer(input, opts, asyncMode)
     local state = {}
 
     -- Copy the state from LibSerializeInt.
@@ -675,7 +781,43 @@ local function CreateDeserializer(input)
     -- Create the reader functions.
     state._readBytes, state._readerBytesLeft = CreateReader(input)
 
+    -- Create a combined options table, starting with the defaults
+    -- and then overwriting any user-supplied keys.
+    state._opts = {}
+    if asyncMode then
+        state._async = true
+        state._yieldCheckFn = opts.yieldCheckFn or defaultYieldCheckFn
+    end
+    opts = opts or {}
+    for k, v in pairs(opts) do
+        state._opts[k] = v
+    end
+
     return state
+end
+
+local function deserializeOperation(deser)
+    -- Since there's only one compression version currently,
+    -- no extra work needs to be done to decode the data.
+    local version = deser:_ReadByte()
+    assert(version <= DESERIALIZATION_VERSION, "Unknown serialization version!")
+
+    -- Since the objects we read may be nil, we need to explicitly
+    -- track the number of results and assign by index so that we
+    -- can call unpack() successfully at the end.
+    local output = {}
+    local outputSize = 0
+
+    while deser._readerBytesLeft() > 0 do
+        outputSize = outputSize + 1
+        output[outputSize] = deser:_ReadObject()
+    end
+
+    if deser._readerBytesLeft() < 0 then
+        error("Reader went past end of input")
+    end
+
+    return unpack(output, 1, outputSize)
 end
 
 
@@ -699,6 +841,10 @@ end
 
 function LibSerializeInt:_ReadObject()
     local value = self:_ReadByte()
+
+    if self._async and self:_yieldCheckFn() then
+        coroutine_yield()
+    end
 
     if value % 2 == 1 then
         -- Number embedded in the top 7 bits.
@@ -966,6 +1112,10 @@ end
 -- Note that _GetWriteFn will raise a Lua error if it finds an
 -- unserializable type, unless this behavior is suppressed via options.
 function LibSerializeInt:_WriteObject(obj)
+    if self._async and self:_yieldCheckFn() then
+        coroutine_yield()
+    end
+
     local writeFn = self:_GetWriteFn(obj)
     if not writeFn then
         return false
@@ -1312,54 +1462,63 @@ end
 
 function LibSerialize:SerializeEx(opts, ...)
     local ser = CreateSerializer(opts)
-
-    ser:_WriteByte(SERIALIZATION_VERSION)
-
-    for i = 1, select("#", ...) do
-        local input = select(i, ...)
-        if not ser:_WriteObject(input) then
-            -- An unserializable object was passed as an argument.
-            -- Write nil into its slot so that we deserialize a
-            -- consistent number of objects from the resulting string.
-            ser:_WriteObject(nil)
-        end
-    end
-
-    return ser._flushWriter()
+    return serializeOperation(ser, ...)
 end
 
 function LibSerialize:Serialize(...)
-    return self:SerializeEx(defaultOptions, ...)
+    return self:SerializeEx(nil, ...)
 end
 
-function LibSerialize:DeserializeValue(input)
-    local deser = CreateDeserializer(input)
+function LibSerialize:SerializeAsyncEx(opts, ...)
+    local ser = CreateSerializer(opts, true)
 
-    -- Since there's only one compression version currently,
-    -- no extra work needs to be done to decode the data.
-    local version = deser:_ReadByte()
-    assert(version <= DESERIALIZATION_VERSION, "Unknown serialization version!")
-
-    -- Since the objects we read may be nil, we need to explicitly
-    -- track the number of results and assign by index so that we
-    -- can call unpack() successfully at the end.
-    local output = {}
-    local outputSize = 0
-
-    while deser._readerBytesLeft() > 0 do
-        outputSize = outputSize + 1
-        output[outputSize] = deser:_ReadObject()
+    local thread = coroutine_create(serializeOperation)
+    local input = {...}
+    -- return coroutine handler
+    return function()
+        local co_success, result = coroutine_resume(thread, ser, unpack(input))
+        if not co_success then
+            return true, false, result
+        elseif coroutine_status(thread) ~= 'dead' then
+            return false
+        else
+            return true, result
+        end
     end
+end
 
-    if deser._readerBytesLeft() < 0 then
-        error("Reader went past end of input")
+function LibSerialize:SerializeAsync(...)
+    return self:SerializeAsyncEx(nil, ...)
+end
+
+function LibSerialize:DeserializeValue(input, opts, async)
+    local deser = CreateDeserializer(input, opts, async)
+
+    if async then
+        function checkCoroutineResult(thread, co_success, ...)
+            if not co_success then
+                return true, false, select(1, ...)
+            elseif coroutine_status(thread) ~= "dead" then
+                return false
+            else
+                return true, true, ...
+            end
+        end
+
+        local thread = coroutine_create(deserializeOperation)
+        return function()
+            return checkCoroutineResult(thread, coroutine_resume(thread, deser))
+        end
     end
-
-    return unpack(output, 1, outputSize)
+    return deserializeOperation(deser)
 end
 
 function LibSerialize:Deserialize(input)
     return pcall(self.DeserializeValue, self, input)
+end
+
+function LibSerialize:DeserializeAsync(input, opts)
+    return self:DeserializeValue(input, opts, true)
 end
 
 return LibSerialize

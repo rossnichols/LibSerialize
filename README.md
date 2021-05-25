@@ -61,7 +61,30 @@ function MyAddon:OnCommReceived(prefix, payload, distribution, sender)
 
     -- Handle `data`
 end
-```
+
+-- Async Mode - Used in WoW to prevent locking the game while processing.
+-- Serialize data:
+local processing = CreateFrame('Frame')
+local handler = LibSerialize:SerializeAsync(tbl)
+processing:SetScript('OnUpdate', function()
+    local completed, serialized = handler()
+    if completed then
+        processing:SetScript('OnUpdate', nil)
+            -- Do something with `serialized`
+        end
+    end
+)
+
+-- Deserialize data:
+local handler = LibSerialize:DeserializeAsync(str)
+processing:SetScript('OnUpdate', function()
+    local completed, success, deserialized = handler()
+    if completed then
+        processing:SetScript('OnUpdate', nil)
+            -- Do something with `deserialized`
+        end
+    end
+)
 
 
 ## API:
@@ -84,6 +107,33 @@ end
 
     Calls `SerializeEx(opts, ...)` with the default options (see below)
 
+* **`LibSerialize:SerializeAsyncEx(opts, ...)`**
+
+    Arguments:
+    * `opts`: options (see below)
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `completed`: Boolean: true if finished, false if there is more to process.
+      * `result`: `...` serialized as a string
+
+* **`LibSerialize:SerializeAsync(...)`**
+
+    Arguments:
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `completed`: Boolean: true if finished, false if there is more to process.
+      * `result`: `...` serialized as a string
+
+    Calls `SerializeAsyncEx(opts, ...)` with the default options (see below)
+
 * **`LibSerialize:Deserialize(input)`**
 
     Arguments:
@@ -100,6 +150,19 @@ end
 
     Returns:
     * `...`: the deserialized value(s)
+
+* **`LibSerialize:DeserializeAsync(input)`**
+
+    Arguments:
+    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `opts`: options (see below)
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false. The remaining return values match `Deserialize()`.
+      `handler` returns:
+      * `success`: a boolean indicating if deserialization was successful
+      * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
 * **`LibSerialize:IsSerializableType(...)`**
 
@@ -146,6 +209,13 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
+When using `SerializeAsyncEx()`, this additional option is supported:
+  * `yieldCheckFn`: `function` Called at each object, return true to yield
+    See `defaultYieldCheckFn` for an example to yield on object count.
+
+The following deserialization option is supported with `DeserializeAsync`:
+  * `yieldCheckFn`: `function` Called at each object, return true to yield
+    See `defaultYieldCheckFn` for an example to yield on object count.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -227,6 +297,29 @@ the following possible keys:
     assert(tab.nested.c == nil)
     ```
 
+5. `LibSerialize:SerializeAsync()` returns a handler which mimics
+    `LibSerialize:Serialize()`, but with a first returned boolean if the process
+    should continue or not.
+    ```lua
+    local t = { "test", [false] = {} }
+    t[ t[false] ] = "hello"
+    local handler = LibSerialize:SerializeAsync(t, "extra")
+    local completed, serialized
+    repeat
+        completed, serialized = co_handler()
+    until completed
+
+    local tab
+    handler = LibSerialize:DeserializeAsync(serialized)
+    repeat
+        completed, tab = handler()
+    until completed
+
+    assert(success)
+    assert(tab[1] == "test")
+    assert(tab[ tab[false] ] == "hello")
+    assert(str == "extra")
+    ```
 
 ## Encoding format:
 Every object is encoded as a type byte followed by type-dependent payload.
