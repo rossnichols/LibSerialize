@@ -7,6 +7,28 @@ local assert = assert
 local unpack = unpack
 local pcall = pcall
 
+
+local tabledata = {}
+for i = 1, 1000 do
+    tabledata[i] = string.rep("abc", 10)
+end
+local serializedString = LibSerialize:Serialize(tabledata);
+
+-- test async
+local result
+local co = coroutine.create(function()
+    result = LibSerialize:DeserializeValue(serializedString)
+end)
+print(coroutine.status(co))
+while (coroutine.status(co) ~= 'dead') do
+    print(coroutine.resume(co, 1000))
+
+
+end
+print(result)
+
+
+
 function LibSerialize:RunTests()
     --[[---------------------------------------------------------------------------
         Examples from the top of LibSerialize.lua
@@ -309,10 +331,10 @@ function LibSerialize:RunTests()
 
     if require then
         local versions = {
-            { "v1.0.0", require("archive\\LibSerialize-v1-0-0") },
-            { "v1.1.0", require("archive\\LibSerialize-v1-1-0") },
+            { "v1.0.0", require("archive/LibSerialize-v1-0-0") },
+            { "v1.1.0", require("archive/LibSerialize-v1-1-0") },
             -- v1.1.1 skipped due to bug with serialization version causing known failures.
-            { "v1.1.2", require("archive\\LibSerialize-v1-1-2") },
+            { "v1.1.2", require("archive/LibSerialize-v1-1-2") },
             { "latest", LibSerialize },
         }
 
