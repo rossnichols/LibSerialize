@@ -484,21 +484,38 @@ local function CreateWriter()
 end
 
 -- Creates a reader to sequentially read bytes from the input string.
+-- Will yield on the first byte read if called from a coroutine.
+-- When it yields it passes the current position in the byte stream,
+-- when resuming it will use the argument to decide when to yield next.
 -- Return values:
 -- 1. ReadBytes(bytelen)
 -- 2. ReaderBytesLeft()
 local function CreateReader(input)
     local inputLen = #input
     local nextPos = 1
+    local limit = 1
 
+    local ReadBytes
     -- Read some bytes from the reader.
     -- @param bytelen The number of bytes to be read.
     -- @return the bytes as a string
-    local function ReadBytes(bytelen)
-        local result = string_sub(input, nextPos, nextPos + bytelen - 1)
-        nextPos = nextPos + bytelen
-        return result
+    if coroutine.running() ~= nil then
+        ReadBytes = function (bytelen)
+            if (nextPos >= limit) then
+                limit = coroutine.yield(nextPos)
+            end
+            local result = string_sub(input, nextPos, nextPos + bytelen - 1)
+            nextPos = nextPos + bytelen
+            return result
+        end
+    else
+        ReadBytes = function(bytelen)
+            local result = string_sub(input, nextPos, nextPos + bytelen - 1)
+            nextPos = nextPos + bytelen
+            return result
+        end
     end
+
 
     local function ReaderBytesLeft()
         return inputLen - nextPos + 1
