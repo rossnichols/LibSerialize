@@ -68,7 +68,7 @@ end
 * **`LibSerialize:SerializeEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (see below)
+    * `opts`: options (see [Serialization Options])
     * `...`: a variable number of serializable values
 
     Returns:
@@ -82,12 +82,12 @@ end
     Returns:
     * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default options (see below)
+    Calls `SerializeEx(opts, ...)` with the default serialization options (see [Serialization Options])
 
 * **`LibSerialize:Deserialize(input)`**
 
     Arguments:
-    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `input`: a string previously returned from `LibSerialize:Serialize()`, or an object that implements the [Reader protocol]
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
@@ -96,7 +96,7 @@ end
 * **`LibSerialize:DeserializeValue(input)`**
 
     Arguments:
-    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `input`: a string previously returned from `LibSerialize:Serialize()`, or an object that implements the [Reader protocol]
 
     Returns:
     * `...`: the deserialized value(s)
@@ -117,19 +117,25 @@ end
 This will occur if any of the following exceed 16777215: any string length,
 any table key count, number of unique strings, number of unique tables.
 It will also occur by default if any unserializable types are encountered,
-though that behavior may be disabled (see options).
+though that behavior may be disabled (see [Serialization Options]).
 
 `Deserialize()` and `DeserializeValue()` are equivalent, except the latter
 returns the deserialization result directly and will not catch any Lua
 errors that may occur when deserializing invalid input.
 
-Note that none of the serialization/deseriazation methods support reentrancy,
-and modifying tables during the serialization process is unspecified and
-should be avoided. Table serialization is multi-phased and assumes a consistent
-state for the key/value pairs across the phases.
+As of recent releases, the library supports reentrancy and concurrent usage
+from multiple threads (coroutines) through the public API. Modifying tables
+during the serialization process is unspecified and should be avoided.
+Table serialization is multi-phased and assumes a consistent state for the
+key/value pairs across the phases.
 
+It is permitted for any user-supplied functions to suspend the current
+thread during the serialization or deserialization process. It is however
+not possible to yield the current thread if the `Deserialize()` API is used,
+as this function inserts a C call boundary onto the call stack. This issue
+does not affect the `DeserializeValue()` function.
 
-## Options:
+## Serialization Options:
 The following serialization options are supported:
 * `errorOnUnserializableType`: `boolean` (default true)
   * `true`: unserializable types will raise a Lua error
@@ -152,6 +158,44 @@ This means that if an option `foo` defaults to true, then:
 * `myOpts.foo = false`: option `foo` is false
 * `myOpts.foo = nil`: option `foo` is true
 
+## Reader Protocol
+The library supports customizing how serialized data is provided to the
+deserialization functions through the use of the "Reader" protocol. This
+enables advanced use cases such as batched or throttled deserialization via
+coroutines, or processing serialized data of an unknown-length in a streamed
+manner.
+
+Any value supplied as the `input` to any deserialization function will be
+inspected and indexed to search for the following keys. If provided, these
+will override default behaviors otherwise implemented by the library.
+
+* `ReadBytes`: `function(input, i, j) => string` (optional)
+  * If specified, this function will be called every time the library needs
+    to read a sequence of bytes as a string from the supplied input. The range
+    of bytes is passed in the `i` and `j` parameters, with similar semantics
+    to standard Lua functions such as `string.sub` and `table.concat`. This
+    function must return a string whose length is equal to the requested range
+    of bytes.
+
+    It is permitted for this function to error if the range of bytes would
+    exceed the available bytes; if an error is raised it will pass through
+    the library back to the caller of Deserialize/DeserializeValue.
+
+    If not supplied, the default implementation will access the contents of
+    `input` as if it were a string and call `string.sub(input, i, j)`.
+
+* `AtEnd`: `function(input, i) => boolean` (optional)
+  * If specified, this function will be called whenever the library needs to
+    test if the end of the input has been reached. The `i` parameter will be
+    supplied a byte offset from the start of the input, and should typically
+    return `true` if `i` is greater than the length of `input`.
+
+    If this function returns true, the stream is considered ended and further
+    values will not be deserialized. If this function returns false,
+    deserialization of further values will continue until it returns true.
+
+    If not supplied, the default implementation will compare the offset `i`
+    against the length of `input` as obtained through the `#` operator.
 
 ## Customizing table serialization:
 For any serialized table, LibSerialize will check for the presence of a
@@ -270,3 +314,6 @@ The type byte uses the following formats to implement the above:
     * Followed by a byte for the upper bits
 * `TTTT T000`: a 5 bit type index
     * Followed by the type-dependent payload, including count(s) if needed
+
+[Serialization Options]: #serialization-options
+[Reader protocol]: #reader-protocol
