@@ -483,28 +483,39 @@ local function CreateWriter()
     return WriteString, FlushWriter
 end
 
+local function HasReachedInputEnd(input, offset)
+    return offset > #input
+end
+
 -- Creates a reader to sequentially read bytes from the input string.
 -- Return values:
 -- 1. ReadBytes(bytelen)
--- 2. ReaderBytesLeft()
-local function CreateReader(input)
-    local inputLen = #input
+-- 2. ReaderAtEnd()
+local function CreateReader(input, options)
     local nextPos = 1
+
+    local readBytes = string_sub
+    local atEnd = HasReachedInputEnd
+
+    if type(options) == "table" then
+        readBytes = options.readBytes or readBytes
+        atEnd = options.atEnd or atEnd
+    end
 
     -- Read some bytes from the reader.
     -- @param bytelen The number of bytes to be read.
     -- @return the bytes as a string
     local function ReadBytes(bytelen)
-        local result = string_sub(input, nextPos, nextPos + bytelen - 1)
+        local result = readBytes(input, nextPos, nextPos + bytelen - 1)
         nextPos = nextPos + bytelen
         return result
     end
 
-    local function ReaderBytesLeft()
-        return inputLen - nextPos + 1
+    local function ReaderAtEnd()
+        return atEnd(input, nextPos)
     end
 
-    return ReadBytes, ReaderBytesLeft
+    return ReadBytes, ReaderAtEnd
 end
 
 
@@ -660,7 +671,7 @@ local function CreateSerializer(opts)
     return state
 end
 
-local function CreateDeserializer(input)
+local function CreateDeserializer(input, options)
     local state = {}
 
     -- Copy the state from LibSerializeInt.
@@ -673,7 +684,7 @@ local function CreateDeserializer(input)
     state._tableRefs = {}
 
     -- Create the reader functions.
-    state._readBytes, state._readerBytesLeft = CreateReader(input)
+    state._readBytes, state._readerAtEnd = CreateReader(input, options)
 
     return state
 end
@@ -1332,8 +1343,8 @@ function LibSerialize:Serialize(...)
     return self:SerializeEx(defaultOptions, ...)
 end
 
-function LibSerialize:DeserializeValue(input)
-    local deser = CreateDeserializer(input)
+function LibSerialize:DeserializeValue(input, options)
+    local deser = CreateDeserializer(input, options)
 
     -- Since there's only one compression version currently,
     -- no extra work needs to be done to decode the data.
@@ -1346,20 +1357,16 @@ function LibSerialize:DeserializeValue(input)
     local output = {}
     local outputSize = 0
 
-    while deser._readerBytesLeft() > 0 do
+    while not deser._readerAtEnd() do
         outputSize = outputSize + 1
         output[outputSize] = deser:_ReadObject()
-    end
-
-    if deser._readerBytesLeft() < 0 then
-        error("Reader went past end of input")
     end
 
     return unpack(output, 1, outputSize)
 end
 
-function LibSerialize:Deserialize(input)
-    return pcall(self.DeserializeValue, self, input)
+function LibSerialize:Deserialize(input, options)
+    return pcall(self.DeserializeValue, self, input, options)
 end
 
 return LibSerialize

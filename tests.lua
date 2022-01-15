@@ -345,6 +345,138 @@ function LibSerialize:RunTests()
         assert(success == false)
     end
 
+    -- Test cases for custom reader and stream implementation support. All
+    -- other cases should exercise the default path of assuming a string
+    -- input and no custom reader logic.
+
+    -- This test will verify that we don't attempt to deserialize beyond
+    -- the end of the 'data' string which has some unprocessable text
+    -- after it.
+
+    do
+        local input = "banana"
+        local serialized = LibSerialize:Serialize(input)
+        local serializedWithPadding = serialized .. "DoNotProcessThisBit"
+
+        local function atEnd(input, i)
+            assert(input == serializedWithPadding)
+            return i > #serialized
+        end
+
+        local value1, value2 = LibSerialize:DeserializeValue(serializedWithPadding, { atEnd = atEnd })
+
+        assert(value1 == input)
+        assert(value2 == nil)  -- To ensure we didn't miraculously deserialize two values.
+    end
+
+    -- This test verifies that we can read a sequence of chars from a table
+    -- as our input stream. No custom 'atEnd' is needed as the table will
+    -- support the default length operator test.
+
+    do
+        local input = { 1, 2, 3, 4, 5 }
+        local serialized = LibSerialize:Serialize(input)
+        local chars = {}
+
+        for i = 1, #serialized do
+            chars[i] = string.sub(serialized, i, i)
+        end
+
+        local function readBytes(input, i, j)
+            assert(input == chars)
+            assert(i >= 1)       -- 'i' should always be a non-zero positive integer.
+            assert(j >= i)       -- 'j' will always be after or at the same place as 'i'
+            assert(j <= #input)  -- With the default atEnd, this should also hold true.
+
+            return table.concat(input, i, j)
+        end
+
+        local value1, value2 = LibSerialize:DeserializeValue(chars, { readBytes = readBytes })
+
+        assert(tCompare(value1, input))
+        assert(value2 == nil)  -- To ensure we didn't miraculously deserialize two values.
+    end
+
+    -- This test verifies that a stream of a potentially-unknown length can
+    -- be fed through LibSerialize, such as reading data from a network and
+    -- processing it within a coroutine.
+
+    do
+        local buffer = ""
+        local hasReachedEnd = false
+
+        local function readBytes(_, i, j)
+            -- For simplicity, if we'd read beyond the range of buffer we'll
+            -- yield and just append the result once resumed to it.
+
+            while not hasReachedEnd and j > #buffer do
+                local data = assert(coroutine.yield())
+                buffer = buffer .. data
+            end
+
+            return string.sub(buffer, i, j)
+        end
+
+        local function atEnd(_, i)
+            -- hasReachedEnd is set when we resume the corutine with the last
+            -- chunk of data, but there might be multiple values within that
+            -- chunk hence needing to test if we've exceeded the buffer too.
+            return hasReachedEnd and i > #buffer
+        end
+
+        -- The thread is expected to suspend on the first call into readBytes.
+
+        local thread = coroutine.create(function()
+            return LibSerialize:DeserializeValue(nil, { readBytes = readBytes, atEnd = atEnd })
+        end)
+
+        assert(coroutine.resume(thread))
+        assert(coroutine.status(thread) == "suspended")
+
+        -- We'll now feed in serialized data at a fixed number of bytes each
+        -- time it yields, simulating us receiving data over a network.
+
+        local BYTES_PER_YIELD = 100
+
+        local values = {}
+
+        for i = 1, 1000 do
+            values[i] = i * 1000
+        end
+
+        local serialized = LibSerialize:Serialize(values)
+        local remaining = serialized
+        local deserialized
+
+        while remaining ~= "" do
+            local chunk = string.sub(remaining, 1, BYTES_PER_YIELD)
+
+            if chunk == remaining then
+                -- This needs setting _before_ resuming or at the end of the
+                -- stream atEnd will return false and the deserializer will
+                -- continue to wait for more bytes.
+                hasReachedEnd = true
+            end
+
+            local ok, result = coroutine.resume(thread, chunk)
+            assert(ok, result)
+            deserialized = result
+            remaining = string.sub(remaining, BYTES_PER_YIELD + 1)
+        end
+
+        -- Verify that we fed all the data into the deserializer.
+
+        assert(hasReachedEnd)
+        assert(remaining == "")
+
+        -- Verify the deserializer thread finished and returned a match for
+        -- our input.
+
+        assert(coroutine.status(thread) == "dead")
+        assert(type(deserialized) == type(values))
+        assert(tCompare(values, deserialized))
+    end
+
     print("All tests passed!")
 end
 
