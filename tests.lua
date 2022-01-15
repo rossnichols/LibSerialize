@@ -363,10 +363,10 @@ function LibSerialize:RunTests()
             return i > #serialized
         end
 
-        local value1, value2 = LibSerialize:DeserializeValue(serializedWithPadding, { atEnd = atEnd })
+        local deserialized1, deserialized2 = LibSerialize:DeserializeValue(serializedWithPadding, { atEnd = atEnd })
 
-        assert(value1 == input)
-        assert(value2 == nil)  -- To ensure we didn't miraculously deserialize two values.
+        assert(deserialized1 == input)
+        assert(deserialized2 == nil)  -- To ensure we didn't miraculously deserialize two values.
     end
 
     -- This test verifies that we can read a sequence of chars from a table
@@ -391,10 +391,9 @@ function LibSerialize:RunTests()
             return table.concat(input, i, j)
         end
 
-        local value1, value2 = LibSerialize:DeserializeValue(chars, { readBytes = readBytes })
+        local deserialized = LibSerialize:DeserializeValue(chars, { readBytes = readBytes })
 
-        assert(tCompare(value1, input))
-        assert(value2 == nil)  -- To ensure we didn't miraculously deserialize two values.
+        assert(tCompare(input, deserialized))
     end
 
     -- This test verifies that a stream of a potentially-unknown length can
