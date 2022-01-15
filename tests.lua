@@ -309,10 +309,10 @@ function LibSerialize:RunTests()
 
     if require then
         local versions = {
-            { "v1.0.0", require("archive\\LibSerialize-v1-0-0") },
-            { "v1.1.0", require("archive\\LibSerialize-v1-1-0") },
+            { "v1.0.0", require("archive.LibSerialize-v1-0-0") },
+            { "v1.1.0", require("archive.LibSerialize-v1-1-0") },
             -- v1.1.1 skipped due to bug with serialization version causing known failures.
-            { "v1.1.2", require("archive\\LibSerialize-v1-1-2") },
+            { "v1.1.2", require("archive.LibSerialize-v1-1-2") },
             { "latest", LibSerialize },
         }
 
