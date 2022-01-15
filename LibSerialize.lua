@@ -104,7 +104,7 @@ end
 * **`LibSerialize:SerializeEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (see below)
+    * `opts`: options (see "Serialization Options")
     * `...`: a variable number of serializable values
 
     Returns:
@@ -118,21 +118,23 @@ end
     Returns:
     * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default options (see below)
+    Calls `SerializeEx(opts, ...)` with the default serialization options (see "Serialization Options")
 
-* **`LibSerialize:Deserialize(input)`**
+* **`LibSerialize:Deserialize(input[, options])`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `options`: an optional table of options to control deserialization (see "Deserialization Options")
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
     * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
-* **`LibSerialize:DeserializeValue(input)`**
+* **`LibSerialize:DeserializeValue(input[, options])`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `options`: an optional table of options to control deserialization (see "Deserialization Options")
 
     Returns:
     * `...`: the deserialized value(s)
@@ -153,19 +155,47 @@ end
 This will occur if any of the following exceed 16777215: any string length,
 any table key count, number of unique strings, number of unique tables.
 It will also occur by default if any unserializable types are encountered,
-though that behavior may be disabled (see options).
+though that behavior may be disabled (see "Serialization Options").
 
 `Deserialize()` and `DeserializeValue()` are equivalent, except the latter
 returns the deserialization result directly and will not catch any Lua
 errors that may occur when deserializing invalid input.
 
-Note that none of the serialization/deseriazation methods support reentrancy,
+Note that none of the serialization/deserialization methods support reentrancy,
 and modifying tables during the serialization process is unspecified and
 should be avoided. Table serialization is multi-phased and assumes a consistent
 state for the key/value pairs across the phases.
 
+## Deserialization Options:
+The following deserialization options are supported:
+* `readBytes`: `function(input, i, j) => string` (optional)
+  * If specified, this function will be called every time the library needs
+    to read a sequence of bytes as a string from the supplied input. The range
+    of bytes is passed in the `i` and `j` parameters, with similar semantics
+    to standard Lua functions such as `string.sub` and `table.concat`. This
+    function must return a string whose length is at-least equal to the
+    requested range of bytes.
 
-## Options:
+    It is permitted for this function to error if the range of bytes would
+    exceed the available bytes; if an error is raised it will pass through
+    the library back to the caller of Deserialize/DeserializeValue.
+* `atEnd`: `function(input, i)` (optional)
+  * If specified, this function will be called whenever the library needs to
+    test if the end of the input has been reached. The `i` parameter will be
+    supplied a byte offset from the start of the input, and should typically
+    return `true` if `i` is greater than the length of `input`.
+
+    If this function returns true, the stream is considered ended and further
+    values will not be deserialized. If this function returns false,
+    deserialization of further values will continue until it returns true.
+
+Implementations for custom functions are permitted to yield the current
+thread if deserialization is being processed within a coroutine, however this
+is only possible if the `DeserializeValue()` function was used and not
+`Deserialize()`. This is because the latter function inserts a C call
+boundary onto the call stack, preventing yields from being possible.
+
+## Serialization Options:
 The following serialization options are supported:
 * `errorOnUnserializableType`: `boolean` (default true)
   * `true`: unserializable types will raise a Lua error
