@@ -68,7 +68,7 @@ end
 * **`LibSerialize:SerializeEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (see below)
+    * `opts`: options (see [Serialization Options])
     * `...`: a variable number of serializable values
 
     Returns:
@@ -82,7 +82,7 @@ end
     Returns:
     * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default options (see below)
+    Calls `SerializeEx(opts, ...)` with the default serialization options (see [Serialization Options])
 
 * **`LibSerialize:Deserialize(input)`**
 
@@ -117,19 +117,26 @@ end
 This will occur if any of the following exceed 16777215: any string length,
 any table key count, number of unique strings, number of unique tables.
 It will also occur by default if any unserializable types are encountered,
-though that behavior may be disabled (see options).
+though that behavior may be disabled (see [Serialization Options]).
 
 `Deserialize()` and `DeserializeValue()` are equivalent, except the latter
 returns the deserialization result directly and will not catch any Lua
 errors that may occur when deserializing invalid input.
 
-Note that none of the serialization/deseriazation methods support reentrancy,
-and modifying tables during the serialization process is unspecified and
-should be avoided. Table serialization is multi-phased and assumes a consistent
-state for the key/value pairs across the phases.
+As of recent releases, the library supports reentrancy and concurrent usage
+from multiple threads (coroutines) through the public API. Modifying tables
+during the serialization process is unspecified and should be avoided.
+Table serialization is multi-phased and assumes a consistent state for the
+key/value pairs across the phases.
+
+It is permitted for any user-supplied functions to suspend the current
+thread during the serialization or deserialization process. It is however
+not possible to yield the current thread if the `Deserialize()` API is used,
+as this function inserts a C call boundary onto the call stack. This issue
+does not affect the `DeserializeValue()` function.
 
 
-## Options:
+## Serialization Options:
 The following serialization options are supported:
 * `errorOnUnserializableType`: `boolean` (default true)
   * `true`: unserializable types will raise a Lua error
@@ -146,11 +153,44 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
+* `writer`: `any` (default nil)
+  * If specified, the object referenced by this field will be checked to see
+    if it implements the [Writer protocol]. If so, the functions it defines
+    will be used to control how serialized data is written.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
 * `myOpts.foo = false`: option `foo` is false
 * `myOpts.foo = nil`: option `foo` is true
+
+
+## Writer Protocol
+The library supports customizing how byte strings are written during the
+serialization process through the use of an object that implements the
+"Writer" protocol. This enables advanced use cases such as batched or throttled
+serialization via coroutines, or streaming the data to a target instead of
+processing it all in one giant chunk.
+
+Any value stored on the `writer` key of the options table passed to the
+`SerializeEx()` function will be inspected and indexed to search for the
+following keys. If the required keys are all found, all operations provided
+by the writer will override the default behaviors otherwise implemented by
+the library. Otherwise, the writer is ignored and not used for any operations.
+
+* `WriteString`: `function(writer, str)` (required)
+  * This function will be called each time the library submits a byte string
+    that was created as result of serializing data.
+
+    If this function is not supplied, the supplied `writer` is considered
+    incomplete and will be ignored for all operations.
+
+* `Flush`: `function(writer)` (optional)
+  * If specified, this function will be called at the end of the serialization
+    process. It may return any number of values - including zero - all of
+    which will be passed through to the caller of `SerializeEx()` verbatim.
+
+    The default behavior if this function is not specified - and if the writer
+    is otherwise valid - is a no-op that returns no values.
 
 
 ## Customizing table serialization:
@@ -270,3 +310,6 @@ The type byte uses the following formats to implement the above:
     * Followed by a byte for the upper bits
 * `TTTT T000`: a 5 bit type index
     * Followed by the type-dependent payload, including count(s) if needed
+
+[Serialization Options]: #serialization-options
+[Writer protocol]: #writer-protocol

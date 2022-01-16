@@ -104,7 +104,7 @@ end
 * **`LibSerialize:SerializeEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (see below)
+    * `opts`: options (see [Serialization Options])
     * `...`: a variable number of serializable values
 
     Returns:
@@ -118,7 +118,7 @@ end
     Returns:
     * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default options (see below)
+    Calls `SerializeEx(opts, ...)` with the default serialization options (see [Serialization Options])
 
 * **`LibSerialize:Deserialize(input)`**
 
@@ -153,19 +153,26 @@ end
 This will occur if any of the following exceed 16777215: any string length,
 any table key count, number of unique strings, number of unique tables.
 It will also occur by default if any unserializable types are encountered,
-though that behavior may be disabled (see options).
+though that behavior may be disabled (see [Serialization Options]).
 
 `Deserialize()` and `DeserializeValue()` are equivalent, except the latter
 returns the deserialization result directly and will not catch any Lua
 errors that may occur when deserializing invalid input.
 
-Note that none of the serialization/deseriazation methods support reentrancy,
-and modifying tables during the serialization process is unspecified and
-should be avoided. Table serialization is multi-phased and assumes a consistent
-state for the key/value pairs across the phases.
+As of recent releases, the library supports reentrancy and concurrent usage
+from multiple threads (coroutines) through the public API. Modifying tables
+during the serialization process is unspecified and should be avoided.
+Table serialization is multi-phased and assumes a consistent state for the
+key/value pairs across the phases.
+
+It is permitted for any user-supplied functions to suspend the current
+thread during the serialization or deserialization process. It is however
+not possible to yield the current thread if the `Deserialize()` API is used,
+as this function inserts a C call boundary onto the call stack. This issue
+does not affect the `DeserializeValue()` function.
 
 
-## Options:
+## Serialization Options:
 The following serialization options are supported:
 * `errorOnUnserializableType`: `boolean` (default true)
   * `true`: unserializable types will raise a Lua error
@@ -182,11 +189,44 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
+* `writer`: `any` (default nil)
+  * If specified, the object referenced by this field will be checked to see
+    if it implements the [Writer protocol]. If so, the functions it defines
+    will be used to control how serialized data is written.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
 * `myOpts.foo = false`: option `foo` is false
 * `myOpts.foo = nil`: option `foo` is true
+
+
+## Writer Protocol
+The library supports customizing how byte strings are written during the
+serialization process through the use of an object that implements the
+"Writer" protocol. This enables advanced use cases such as batched or throttled
+serialization via coroutines, or streaming the data to a target instead of
+processing it all in one giant chunk.
+
+Any value stored on the `writer` key of the options table passed to the
+`SerializeEx()` function will be inspected and indexed to search for the
+following keys. If the required keys are all found, all operations provided
+by the writer will override the default behaviors otherwise implemented by
+the library. Otherwise, the writer is ignored and not used for any operations.
+
+* `WriteString`: `function(writer, str)` (required)
+  * This function will be called each time the library submits a byte string
+    that was created as result of serializing data.
+
+    If this function is not supplied, the supplied `writer` is considered
+    incomplete and will be ignored for all operations.
+
+* `Flush`: `function(writer)` (optional)
+  * If specified, this function will be called at the end of the serialization
+    process. It may return any number of values - including zero - all of
+    which will be passed through to the caller of `SerializeEx()` verbatim.
+
+    The default behavior if this function is not specified - and if the writer
+    is otherwise valid - is a no-op that returns no values.
 
 
 ## Customizing table serialization:
@@ -384,6 +424,29 @@ local function GetRequiredBytesNumber(value)
     return 7
 end
 
+-- Queries a given object for the value assigned to a specific key.
+--
+-- If the given object cannot be indexed, an error may be raised by the Lua
+-- implementation.
+local function GetValueByKey(object, key)
+    return object[key]
+end
+
+-- Queries a given object for the value assigned to a specific key, returning
+-- it if non-nil or giving back a default.
+--
+-- If the given object cannot be indexed, the default will be returned and
+-- no error raised.
+local function GetValueByKeyOrDefault(object, key, default)
+    local ok, value = pcall(GetValueByKey, object, key)
+
+    if not ok or value == nil then
+        return default
+    else
+        return value
+    end
+end
+
 -- Returns whether the value (a number) is NaN.
 local function IsNaN(value)
     -- With floating point optimizations enabled all comparisons involving
@@ -414,6 +477,11 @@ end
 -- array section of a table (keys 1 through arrayCount).
 local function IsArrayKey(k, arrayCount)
     return type(k) == "number" and k >= 1 and k <= arrayCount and not IsFloatingPoint(k)
+end
+
+-- Portable no-op function that does absolutely nothing, and pushes no returns
+-- onto the stack.
+local function Noop()
 end
 
 -- Sort compare function which is used to sort table keys to ensure that the
@@ -453,7 +521,6 @@ local DebugPrint = function(...)
     print(...)
 end
 
-
 --[[---------------------------------------------------------------------------
     Helpers for reading/writing streams of bytes from/to a string
 --]]---------------------------------------------------------------------------
@@ -461,19 +528,17 @@ end
 -- Creates a writer to lazily construct a string over multiple writes.
 -- Return values:
 -- 1. WriteString(str)
--- 2. Flush()
-local function CreateWriter()
+-- 2. FlushWriter()
+
+local function CreateBufferedWriter()
     local bufferSize = 0
     local buffer = {}
 
-    -- Write the entire string into the writer.
     local function WriteString(str)
-        -- DebugPrint("Writing string:", str, #str)
         bufferSize = bufferSize + 1
         buffer[bufferSize] = str
     end
 
-    -- Return a string built from the previous calls to WriteString.
     local function FlushWriter()
         local flushed = table_concat(buffer, "", 1, bufferSize)
         bufferSize = 0
@@ -481,6 +546,47 @@ local function CreateWriter()
     end
 
     return WriteString, FlushWriter
+end
+
+local function CreateWriterFromObject(object)
+    -- Note that for custom writers if no Flush implementation is given the
+    -- default is a no-op; this means that no values will be returned to the
+    -- caller of Serialize/SerializeEx. It's expected in such a case that
+    -- you will have written the strings elsewhere yourself; perhaps having
+    -- already submitted them for transmission via a comms API for example.
+
+    local writeString = object.WriteString  -- Assumed to exist.
+    local flushWriter = GetValueByKeyOrDefault(object, "Flush", Noop)
+
+    -- To minimize changes elsewhere with this initial implementation, this
+    -- function must return new closures that bind the 'object' to the first
+    -- parameter of the above functions. This could be optimized to remove the
+    -- indirection, but requires modifying all call sites of these functions.
+
+    local function WriteString(str)
+        writeString(object, str)
+    end
+
+    local function FlushWriter()
+        return flushWriter(object)
+    end
+
+    return WriteString, FlushWriter
+end
+
+local function CreateWriter(object)
+    -- If the supplied object implements the required functions to satisfy
+    -- the Writer interface, it will be used exclusively. Otherwise if any
+    -- of those are missing, the object is entirely ignored and we'll use
+    -- the original buffer-of-strings approach.
+
+    local writeString = GetValueByKeyOrDefault(object, "WriteString", nil)
+
+    if writeString == nil then
+        return CreateBufferedWriter()
+    else
+        return CreateWriterFromObject(object)
+    end
 end
 
 -- Creates a reader to sequentially read bytes from the input string.
@@ -645,7 +751,7 @@ local function CreateSerializer(opts)
     state._tableRefs = {}
 
     -- Create the writer functions.
-    state._writeString, state._flushWriter = CreateWriter()
+    state._writeString, state._flushWriter = CreateWriter(opts.writer)
 
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
