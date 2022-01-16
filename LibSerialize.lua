@@ -179,6 +179,9 @@ The following deserialization options are supported:
     It is permitted for this function to error if the range of bytes would
     exceed the available bytes; if an error is raised it will pass through
     the library back to the caller of Deserialize/DeserializeValue.
+
+    If not supplied, the default implementation will access the contents of
+    `input` as if it were a string and call `string.sub(input, i, j)`.
 * `atEnd`: `function(input, i)` (optional)
   * If specified, this function will be called whenever the library needs to
     test if the end of the input has been reached. The `i` parameter will be
@@ -188,6 +191,9 @@ The following deserialization options are supported:
     If this function returns true, the stream is considered ended and further
     values will not be deserialized. If this function returns false,
     deserialization of further values will continue until it returns true.
+
+    If not supplied, the default implementation will compare the offset `i`
+    against the length of `input` as obtained through the `#` operator.
 
 Implementations for custom functions are permitted to yield the current
 thread if deserialization is being processed within a coroutine, however this
