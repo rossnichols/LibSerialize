@@ -181,6 +181,20 @@ function LibSerialize:RunTests()
         return true
     end
 
+    local function Mixin(obj, ...)
+        for i = 1, select("#", ...) do
+            for k, v in pairs((select(i, ...))) do
+                obj[k] = v
+            end
+        end
+
+        return obj
+    end
+
+    local function PackTable(...)
+        return { n = select("#", ...), ... }
+    end
+
 
     --[[---------------------------------------------------------------------------
         Test cases for serialization
@@ -345,23 +359,10 @@ function LibSerialize:RunTests()
         assert(success == false)
     end
 
-    -- Test cases for custom reader protocol support. All other cases should
-    -- exercise the default path of assuming a string input and no custom
-    -- reader logic.
 
-    local function Mixin(obj, ...)
-        for i = 1, select("#", ...) do
-            for k, v in pairs((select(i, ...))) do
-                obj[k] = v
-            end
-        end
-
-        return obj
-    end
-
-    local function PackTable(...)
-        return { n = select("#", ...), ... }
-    end
+    --[[---------------------------------------------------------------------------
+        Test cases for generic readers
+    --]]---------------------------------------------------------------------------
 
     -- This test will verify that we don't attempt to deserialize beyond
     -- the end of the 'data' string which has some unprocessable text
