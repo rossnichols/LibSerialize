@@ -497,6 +497,10 @@ function LibSerialize:RunTests()
         assert(tCompare(output, value), "expected 'output' to be identical to 'value'")
     end
 
+    -- This test verifies that while reading we can throttle the rate of
+    -- processing by yielding the current thread, allowing deserialization
+    -- to be batched into chunks based on the number of bytes processed.
+
     do
         local ThrottledReader = {}
 
