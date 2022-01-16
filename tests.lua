@@ -551,6 +551,128 @@ function LibSerialize:RunTests()
         assert(tCompare(output, value), "expected 'output' to be identical to 'value'")
     end
 
+
+    --[[---------------------------------------------------------------------------
+        Test cases for generic writers
+    --]]---------------------------------------------------------------------------
+
+    -- This test verifies the basic functionality of a custom writer that
+    -- writes to a reusable buffer and returns its concatenated result to
+    -- the serializer.
+
+    do
+        local PersistentBuffer = {}
+
+        function PersistentBuffer:WriteString(str)
+            self.n = self.n + 1
+            self[self.n] = str
+        end
+
+        function PersistentBuffer:Flush()
+            local flushed = table.concat(self, "", 1, self.n)
+            self.n = 0
+            return flushed
+        end
+
+        local function CreatePersistentBuffer()
+            return Mixin({ n = 0 }, PersistentBuffer)
+        end
+
+        local value = { 1, 2, 3, 4, 5, true, false, "banana" }
+        local writer = CreatePersistentBuffer()
+        local bytes = LibSerialize:SerializeEx({ writer = writer }, value)
+
+        assert(type(bytes) == "string", "expected 'bytes' to be a string")
+        assert(writer.n == 0, "expected 'writer' to have been flushed")
+
+        local output = LibSerialize:DeserializeValue(bytes)
+
+        assert(type(output) == type(value), "expected 'output' to be of the same type as 'value'")
+        assert(tCompare(output, value), "expected 'output' to be fully comparable to 'value'")
+    end
+
+    -- This test verifies that if no Flush implementation is given, the default
+    -- will return nothing from the Serialize function. As documented in the
+    -- library, it's expected that such a writer would likely be submitting
+    -- string as it gets them to another destination.
+
+    do
+        local NullWriter = {}
+
+        function NullWriter:WriteString(str)
+            assert(type(str) == "string")  -- 'str' should always be a string
+            self.writes = self.writes + 1
+        end
+
+        local function CreateNullWriter()
+            return Mixin({ writes = 0 }, NullWriter)
+        end
+
+        local value = { 1, 2, 3, 4, 5, true, false, "banana" }
+        local writer = CreateNullWriter()
+        local result = PackTable(LibSerialize:SerializeEx({ writer = writer }, value))
+
+        assert(result.n == 0, "expected no return values from 'SerializeEx' call")
+        assert(writer.writes > 0, "expected 'WriteString' to have been called at least once")
+    end
+
+    -- This test verifies that the pace at which serialization occurs can be
+    -- throttled within a coroutine.
+
+    do
+        local ThrottledWriter = {}
+
+        function ThrottledWriter:WriteString(str)
+            if self.written > self.rate then
+                coroutine.yield()
+                self.written = self.written - self.rate
+            end
+
+            local length = #str
+            self.written = self.written + length
+            self.size = self.size + 1
+            self.buffer[self.size] = str
+        end
+
+        function ThrottledWriter:Flush()
+            local flushed = table.concat(self.buffer, "", 1, self.size)
+            self.size = 0
+            return flushed
+        end
+
+        local function CreateThrottledWriter(rate)
+            return Mixin({ buffer = {}, size = 0, written = 0, rate = rate }, ThrottledWriter)
+        end
+
+        -- Use a large table for 'value' so that the thread the serializer
+        -- yields a few times.
+
+        local value = {}
+
+        for i = 1, 1000 do
+            value[i] = i * 1000
+        end
+
+        local writer = CreateThrottledWriter(100)
+        local thread = coroutine.create(function() return LibSerialize:SerializeEx({ writer = writer }, value) end)
+
+        local bytes
+
+        while coroutine.status(thread) ~= "dead" do
+            local ok
+            ok, bytes = coroutine.resume(thread)
+            assert(ok, bytes)  -- If not ok, 'bytes' will be an error.
+        end
+
+        assert(type(bytes) == "string", "expected 'bytes' to be a string")
+        assert(writer.size == 0, "expected 'writer' to have been flushed")
+
+        local output = LibSerialize:DeserializeValue(bytes)
+
+        assert(type(output) == type(value), "expected 'output' to be of the same type as 'value'")
+        assert(tCompare(output, value), "expected 'output' to be fully comparable to 'value'")
+    end
+
     print("All tests passed!")
 end
 

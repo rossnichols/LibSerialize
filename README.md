@@ -152,6 +152,10 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
+* `writer`: `any` (default nil)
+  * If specified, the object referenced by this field will be checked to see
+    if it implements the [Writer protocol]. If so, the functions it defines
+    will be used to control how serialized data is written.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -196,6 +200,35 @@ will override default behaviors otherwise implemented by the library.
 
     If not supplied, the default implementation will compare the offset `i`
     against the length of `input` as obtained through the `#` operator.
+
+## Writer Protocol
+The library supports customizing how byte strings are written during the
+serialization process through the use of an object that implements the
+"Writer" protocol. This enables advanced use cases such as batched or throttled
+serialization via coroutines, or streaming the data to a target instead of
+processing it all in one giant chunk.
+
+Any value stored on the `writer` key of the options table passed to the
+`SerializeEx()` function will be inspected and indexed to search for the
+following keys. If the required keys are all found, all operations provided
+by the writer will override the default behaviors otherwise implemented by
+the library. Otherwise, the writer is ignored and not used for any operations.
+
+* `WriteString`: `function(writer, str)` (required)
+  * This function will be called each time the library submits a byte string
+    that was created as result of serializing data.
+
+    If this function is not supplied, the supplied `writer` is considered
+    incomplete and will be ignored for all operations.
+
+* `Flush`: `function(writer)` (optional)
+  * If specified, this function will be called at the end of the serialization
+    process. It may return any number of values - including zero - all of
+    which will be passed through to the caller of `SerializeEx()` verbatim.
+
+    The default behavior if this function is not specified - and if the writer
+    is otherwise valid - is a no-op that returns no values.
+
 
 ## Customizing table serialization:
 For any serialized table, LibSerialize will check for the presence of a
@@ -317,3 +350,4 @@ The type byte uses the following formats to implement the above:
 
 [Serialization Options]: #serialization-options
 [Reader protocol]: #reader-protocol
+[Writer protocol]: #writer-protocol
