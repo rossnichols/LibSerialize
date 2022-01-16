@@ -455,7 +455,7 @@ function LibSerialize:RunTests()
         local value = {}
 
         for i = 1, 1000 do
-            value[i] = i * 1000  -- Tests a range of sizes going into ReadBytes.
+            value[i] = i * 1000
         end
 
         local bytes = LibSerialize:Serialize(value)
@@ -493,6 +493,55 @@ function LibSerialize:RunTests()
         -- obtained the result of deserialization.
 
         assert(coroutine.status(thread) == "dead", "expected 'thread' to have finished executing")
+        assert(type(output) == type(value), "expected 'output' to be same type as 'value'")
+        assert(tCompare(output, value), "expected 'output' to be identical to 'value'")
+    end
+
+    do
+        local ThrottledReader = {}
+
+        function ThrottledReader:ReadBytes(i, j)
+            if self.read >= self.rate then
+                coroutine.yield()
+                self.read = 0
+            end
+
+            local length = (j - i) + 1
+            self.read = self.read + length
+            return string.sub(self.bytes, i, j)
+        end
+
+        function ThrottledReader:AtEnd(i)
+            return i > #self.bytes
+        end
+
+        local function CreateThrottledReader(bytes, rate)
+            return Mixin({ bytes = bytes, rate = rate, read = 0 }, ThrottledReader)
+        end
+
+        -- Use a large table for 'value' so that the thread the deserializer
+        -- runs into will yield a good number of times.
+
+        local value = {}
+
+        for i = 1, 1000 do
+            value[i] = i * 1000
+        end
+
+        local bytes = LibSerialize:Serialize(value)
+        local input = CreateThrottledReader(bytes, 256)
+        local thread = coroutine.create(function() return LibSerialize:DeserializeValue(input) end)
+
+        -- This test mostly serves as an example, but...
+
+        local output
+
+        while coroutine.status(thread) ~= "dead" do
+            local ok
+            ok, output = coroutine.resume(thread)
+            assert(ok, output)  -- If not ok, 'output' will be an error.
+        end
+
         assert(type(output) == type(value), "expected 'output' to be same type as 'value'")
         assert(tCompare(output, value), "expected 'output' to be identical to 'value'")
     end
