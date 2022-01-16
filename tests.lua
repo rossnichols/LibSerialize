@@ -383,8 +383,8 @@ function LibSerialize:RunTests()
         end
 
         local value = "banana"
-        local bytes = LibSerialize:Serialize(value) .. "WithSomeExtraData"
-        local input = CreateLimitedReader(bytes, #value)
+        local bytes = LibSerialize:Serialize(value)
+        local input = CreateLimitedReader(bytes .. "WithSomeExtraData", #bytes)
 
         local output = PackTable(LibSerialize:DeserializeValue(input))
 
