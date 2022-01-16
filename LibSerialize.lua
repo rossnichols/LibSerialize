@@ -153,7 +153,7 @@ end
 This will occur if any of the following exceed 16777215: any string length,
 any table key count, number of unique strings, number of unique tables.
 It will also occur by default if any unserializable types are encountered,
-though that behavior may be disabled (see "Serialization Options").
+though that behavior may be disabled (see [Serialization Options]).
 
 `Deserialize()` and `DeserializeValue()` are equivalent, except the latter
 returns the deserialization result directly and will not catch any Lua
