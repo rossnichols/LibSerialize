@@ -174,8 +174,8 @@ will override default behaviors otherwise implemented by the library.
     to read a sequence of bytes as a string from the supplied input. The range
     of bytes is passed in the `i` and `j` parameters, with similar semantics
     to standard Lua functions such as `string.sub` and `table.concat`. This
-    function must return a string whose length is at-least equal to the
-    requested range of bytes.
+    function must return a string whose length is equal to the requested range
+    of bytes.
 
     It is permitted for this function to error if the range of bytes would
     exceed the available bytes; if an error is raised it will pass through
