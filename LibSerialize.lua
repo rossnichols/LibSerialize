@@ -429,6 +429,35 @@ local function GetRequiredBytesNumber(value)
     return 7
 end
 
+-- Queries a given object for the value assigned to a specific key.
+--
+-- If the given object cannot be indexed, an error may be raised by the Lua
+-- implementation.
+local function GetValueByKey(object, key)
+    return object[key]
+end
+
+-- Queries a given object for the value assigned to a specific key, returning
+-- it if non-nil or giving back a default.
+--
+-- If the given object cannot be indexed, the default will be returned and
+-- no error raised.
+local function GetValueByKeyOrDefault(object, key, default)
+    local ok, value = pcall(GetValueByKey, object, key)
+
+    if not ok or value == nil then
+        return default
+    else
+        return value
+    end
+end
+
+-- Implements the default end-of-stream check for a reader. This requires
+-- that the supplied input object supports the length operator.
+local function HasReachedInputEnd(input, offset)
+    return offset > #input
+end
+
 -- Returns whether the value (a number) is NaN.
 local function IsNaN(value)
     -- With floating point optimizations enabled all comparisons involving
@@ -526,35 +555,6 @@ local function CreateWriter()
     end
 
     return WriteString, FlushWriter
-end
-
--- Queries a given object for the value assigned to a specific key.
---
--- If the given object cannot be indexed, an error may be raised by the Lua
--- implementation.
-local function GetValueByKey(object, key)
-    return object[key]
-end
-
--- Queries a given object for the value assigned to a specific key, returning
--- it if non-nil or giving back a default.
---
--- If the given object cannot be indexed, the default will be returned and
--- no error raised.
-local function GetValueByKeyOrDefault(object, key, default)
-    local ok, value = pcall(GetValueByKey, object, key)
-
-    if not ok or value == nil then
-        return default
-    else
-        return value
-    end
-end
-
--- Implements the default end-of-stream check for a reader. This requires
--- that the supplied input object supports the length operator.
-local function HasReachedInputEnd(input, offset)
-    return offset > #input
 end
 
 -- Creates a reader to sequentially read bytes from the input string.
