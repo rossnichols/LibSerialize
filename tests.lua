@@ -345,55 +345,79 @@ function LibSerialize:RunTests()
         assert(success == false)
     end
 
-    -- Test cases for custom reader and stream implementation support. All
-    -- other cases should exercise the default path of assuming a string
-    -- input and no custom reader logic.
+    -- Test cases for custom reader protocol support. All other cases should
+    -- exercise the default path of assuming a string input and no custom
+    -- reader logic.
+
+    local function Mixin(obj, ...)
+        for i = 1, select("#", ...) do
+            for k, v in pairs((select(i, ...))) do
+                obj[k] = v
+            end
+        end
+
+        return obj
+    end
+
+    local function PackTable(...)
+        return { n = select("#", ...), ... }
+    end
 
     -- This test will verify that we don't attempt to deserialize beyond
     -- the end of the 'data' string which has some unprocessable text
     -- after it.
 
     do
-        local input = "banana"
-        local serialized = LibSerialize:Serialize(input)
-        local serializedWithPadding = serialized .. "DoNotProcessThisBit"
+        local LimitedReader = {}
 
-        local function atEnd(input, i)
-            assert(input == serializedWithPadding)
-            return i > #serialized
+        function LimitedReader:ReadBytes(i, j)
+            return string.sub(self.bytes, i, j)
         end
 
-        local deserialized1, deserialized2 = LibSerialize:DeserializeValue(serializedWithPadding, { atEnd = atEnd })
+        function LimitedReader:AtEnd(i)
+            return i > self.limit
+        end
 
-        assert(deserialized1 == input)
-        assert(deserialized2 == nil)  -- To ensure we didn't miraculously deserialize two values.
+        local function CreateLimitedReader(bytes, limit)
+            return Mixin({ bytes = bytes, limit = limit }, LimitedReader)
+        end
+
+        local value = "banana"
+        local bytes = LibSerialize:Serialize(value) .. "WithSomeExtraData"
+        local input = CreateLimitedReader(bytes, #value)
+
+        local output = PackTable(LibSerialize:DeserializeValue(input))
+
+        assert(output.n == 1, "expected one value to be deserialized")
+        assert(output[1] == value, "expected original value to be deserialized")
     end
 
-    -- This test verifies that we can read a sequence of chars from a table
-    -- as our input stream. No custom 'atEnd' is needed as the table will
-    -- support the default length operator test.
+    -- This test verifies that we can read a sequence of numeric bytes from a
+    -- table as our input stream. No custom 'AtEnd' logic is needed as the
+    -- table will support the default length operator test.
 
     do
-        local input = { 1, 2, 3, 4, 5 }
-        local serialized = LibSerialize:Serialize(input)
-        local chars = {}
+        local ByteReader = {}
 
-        for i = 1, #serialized do
-            chars[i] = string.sub(serialized, i, i)
+        function ByteReader:ReadBytes(i, j)
+            assert(i >= 1)      -- 'i' should always be a non-zero positive integer.
+            assert(j >= i)      -- 'j' will always be after or at the same place as 'i'
+            assert(j <= #self)  -- 'j' will never exceed the length of the input.
+
+            return table.concat({ string.char(unpack(self, i, j)) }, "")
         end
 
-        local function readBytes(input, i, j)
-            assert(input == chars)
-            assert(i >= 1)       -- 'i' should always be a non-zero positive integer.
-            assert(j >= i)       -- 'j' will always be after or at the same place as 'i'
-            assert(j <= #input)  -- With the default atEnd, this should also hold true.
-
-            return table.concat(input, i, j)
+        local function CreateByteReader(bytes)
+            return Mixin({ string.byte(bytes, 1, #bytes) }, ByteReader)
         end
 
-        local deserialized = LibSerialize:DeserializeValue(chars, { readBytes = readBytes })
+        local value = { 1, true, false, "banana" }
+        local bytes = LibSerialize:Serialize(value)
+        local input = CreateByteReader(bytes)
 
-        assert(tCompare(input, deserialized))
+        local output = LibSerialize:DeserializeValue(input)
+
+        assert(tCompare(output, value), "expected 'output' to be identical to 'value'")
     end
 
     -- This test verifies that a stream of a potentially-unknown length can
@@ -401,79 +425,76 @@ function LibSerialize:RunTests()
     -- processing it within a coroutine.
 
     do
-        local buffer = ""
-        local hasReachedEnd = false
+        local StreamReader = {}
 
-        local function readBytes(_, i, j)
-            -- For simplicity, if we'd read beyond the range of buffer we'll
-            -- yield and just append the result once resumed to it.
+        function StreamReader:ReadBytes(i, j)
+            -- For testing simplicity, our "bytes" buffer is just append-only.
 
-            while not hasReachedEnd and j > #buffer do
-                local data = assert(coroutine.yield())
-                buffer = buffer .. data
+            while self.canReadMore and j > #self.bytes do
+                local bytes, finished = assert(coroutine.yield())
+                self.bytes = self.bytes .. bytes
+                self.canReadMore = not finished
             end
 
-            return string.sub(buffer, i, j)
+            return string.sub(self.bytes, i, j)
         end
 
-        local function atEnd(_, i)
-            -- hasReachedEnd is set when we resume the corutine with the last
-            -- chunk of data, but there might be multiple values within that
-            -- chunk hence needing to test if we've exceeded the buffer too.
-            return hasReachedEnd and i > #buffer
+        function StreamReader:AtEnd(i)
+            return not self.canReadMore and i > #self.bytes
         end
 
-        -- The thread is expected to suspend on the first call into readBytes.
+        local function CreateStreamReader()
+            return Mixin({ canReadMore = true, bytes = "" }, StreamReader)
+        end
 
-        local thread = coroutine.create(function()
-            return LibSerialize:DeserializeValue(nil, { readBytes = readBytes, atEnd = atEnd })
-        end)
+        -- Use a large table for 'value' with a large range of numbers as
+        -- this gives the best coverage for testing multiple ReadBytes
+        -- calls between each yield, as well as a good range of sizes for
+        -- the range (i, j).
 
-        assert(coroutine.resume(thread))
-        assert(coroutine.status(thread) == "suspended")
-
-        -- We'll now feed in serialized data at a fixed number of bytes each
-        -- time it yields, simulating us receiving data over a network.
-
-        local BYTES_PER_YIELD = 100
-
-        local values = {}
+        local value = {}
 
         for i = 1, 1000 do
-            values[i] = i * 1000
+            value[i] = i * 1000  -- Tests a range of sizes going into ReadBytes.
         end
 
-        local serialized = LibSerialize:Serialize(values)
-        local remaining = serialized
-        local deserialized
+        local bytes = LibSerialize:Serialize(value)
+        local input = CreateStreamReader()
+        local thread = coroutine.create(function() return LibSerialize:DeserializeValue(input) end)
 
-        while remaining ~= "" do
-            local chunk = string.sub(remaining, 1, BYTES_PER_YIELD)
+        -- The thread is expected to suspend on the first call into ReadBytes.
 
-            if chunk == remaining then
-                -- This needs setting _before_ resuming or at the end of the
-                -- stream atEnd will return false and the deserializer will
-                -- continue to wait for more bytes.
-                hasReachedEnd = true
+        assert(coroutine.resume(thread))
+        assert(coroutine.status(thread) == "suspended", "expected 'thread' to have suspended")
+
+        -- Now resume the thread repeatedly feeding in a large chunk each
+        -- time it yields back to us, until we've run out of data.
+
+        local output
+
+        do
+            local remaining = bytes
+            local chunkSize = 100
+
+            while remaining ~= "" do
+                local chunk = string.sub(remaining, 1, chunkSize)
+                local after = string.sub(remaining, chunkSize + 1)
+                local finished = (after == "")
+                local ok
+
+                ok, output = coroutine.resume(thread, chunk, finished)
+                assert(ok, output)  -- If not ok, 'output' will be an error.
+
+                remaining = after
             end
-
-            local ok, result = coroutine.resume(thread, chunk)
-            assert(ok, result)
-            deserialized = result
-            remaining = string.sub(remaining, BYTES_PER_YIELD + 1)
         end
 
-        -- Verify that we fed all the data into the deserializer.
+        -- At this point the thread is expected to be dead and we should have
+        -- obtained the result of deserialization.
 
-        assert(hasReachedEnd)
-        assert(remaining == "")
-
-        -- Verify the deserializer thread finished and returned a match for
-        -- our input.
-
-        assert(coroutine.status(thread) == "dead")
-        assert(type(deserialized) == type(values))
-        assert(tCompare(values, deserialized))
+        assert(coroutine.status(thread) == "dead", "expected 'thread' to have finished executing")
+        assert(type(output) == type(value), "expected 'output' to be same type as 'value'")
+        assert(tCompare(output, value), "expected 'output' to be identical to 'value'")
     end
 
     print("All tests passed!")
