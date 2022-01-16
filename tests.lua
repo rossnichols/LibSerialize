@@ -508,7 +508,7 @@ function LibSerialize:RunTests()
         function ThrottledReader:ReadBytes(i, j)
             if self.read >= self.rate then
                 coroutine.yield()
-                self.read = 0
+                self.read = self.read - self.rate
             end
 
             local length = (j - i) + 1
