@@ -68,7 +68,7 @@ end
 * **`LibSerialize:SerializeEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (see "Serialization Options")
+    * `opts`: options (see [Serialization Options])
     * `...`: a variable number of serializable values
 
     Returns:
@@ -82,13 +82,13 @@ end
     Returns:
     * `result`: `...` serialized as a string
 
-    Calls `SerializeEx(opts, ...)` with the default serialization options (see "Serialization Options")
+    Calls `SerializeEx(opts, ...)` with the default serialization options (see [Serialization Options])
 
 * **`LibSerialize:Deserialize(input[, options])`**
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
-    * `options`: an optional table of options to control deserialization (see "Deserialization Options")
+    * `options`: an optional table of options to control deserialization (see [Deserialization Options])
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
@@ -98,7 +98,7 @@ end
 
     Arguments:
     * `input`: a string previously returned from `LibSerialize:Serialize()`
-    * `options`: an optional table of options to control deserialization (see "Deserialization Options")
+    * `options`: an optional table of options to control deserialization (see [Deserialization Options])
 
     Returns:
     * `...`: the deserialized value(s)
@@ -119,7 +119,7 @@ end
 This will occur if any of the following exceed 16777215: any string length,
 any table key count, number of unique strings, number of unique tables.
 It will also occur by default if any unserializable types are encountered,
-though that behavior may be disabled (see "Serialization Options").
+though that behavior may be disabled (see [Serialization Options]).
 
 `Deserialize()` and `DeserializeValue()` are equivalent, except the latter
 returns the deserialization result directly and will not catch any Lua
@@ -306,3 +306,6 @@ The type byte uses the following formats to implement the above:
     * Followed by a byte for the upper bits
 * `TTTT T000`: a 5 bit type index
     * Followed by the type-dependent payload, including count(s) if needed
+
+[Serialization Options]: #serialization-options
+[Deserialization Options]: #deserialization-options
