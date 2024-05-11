@@ -61,6 +61,30 @@ function MyAddon:OnCommReceived(prefix, payload, distribution, sender)
 
     -- Handle `data`
 end
+
+-- Async Mode - Used in WoW to prevent locking the game while processing.
+-- Serialize data:
+local processing = CreateFrame('Frame')
+local handler = LibSerialize:SerializeAsync(tbl)
+processing:SetScript('OnUpdate', function()
+    local completed, serialized = handler()
+    if completed then
+        processing:SetScript('OnUpdate', nil)
+            -- Do something with `serialized`
+        end
+    end
+)
+
+-- Deserialize data:
+local handler = LibSerialize:DeserializeAsync(str)
+processing:SetScript('OnUpdate', function()
+    local completed, success, deserialized = handler()
+    if completed then
+        processing:SetScript('OnUpdate', nil)
+            -- Do something with `deserialized`
+        end
+    end
+)
 ```
 
 
@@ -68,7 +92,7 @@ end
 * **`LibSerialize:SerializeEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (see below)
+    * `opts`: options (optional, see below)
     * `...`: a variable number of serializable values
 
     Returns:
@@ -87,16 +111,17 @@ end
 * **`LibSerialize:Deserialize(input)`**
 
     Arguments:
-    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `input`: a string previously returned from a LibSerialize serialization API
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
     * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
-* **`LibSerialize:DeserializeValue(input)`**
+* **`LibSerialize:DeserializeValue(input, opts)`**
 
     Arguments:
-    * `input`: a string previously returned from `LibSerialize:Serialize()`
+    * `input`: a string previously returned from a LibSerialize serialization API
+    * `opts`: options (optional, see below)
 
     Returns:
     * `...`: the deserialized value(s)
@@ -129,6 +154,62 @@ should be avoided. Table serialization is multi-phased and assumes a consistent
 state for the key/value pairs across the phases.
 
 
+## Asynchronous API
+
+* **`LibSerialize:SerializeAsyncEx(opts, ...)`**
+
+    Arguments:
+    * `opts`: options (optional, see below)
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `completed`: a boolean indicating whether serialization is finished
+      * `result`: once complete, `...` serialized as a string
+
+    Calls `SerializeEx(opts, ...)` with the specified options, as well as setting
+    the `async` option to true (see below).
+
+* **`LibSerialize:SerializeAsync(...)`**
+
+    Arguments:
+    * `...`: a variable number of serializable values
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `completed`: a boolean indicating whether serialization is finished
+      * `result`: once complete, `...` serialized as a string
+
+    Calls `SerializeEx(opts, ...)` with the default options, as well as setting
+    the `async` option to true (see below).
+
+* **`LibSerialize:DeserializeAsync(input, opts)`**
+
+    Arguments:
+    * `input`: a string previously returned from a LibSerialize serialization API
+    * `opts`: options (optional, see below)
+
+    Returns:
+    * `handler`: function to run the process. This should be run until the
+      first returned value is false.
+      `handler` returns:
+      * `completed`: a boolean indicating whether deserialization is finished
+      * `success`: once complete, a boolean indicating if deserialization was successful
+      * `...`: once complete, the deserialized value(s), or a string containing the
+        encountered Lua error
+
+    Calls `DeserializeValue(opts, ...)` with the specified options, as well as setting
+    the `async` option to true (see below).
+
+Errors encountered when serializing behave the same way as the synchronous APIs.
+Errors encountered when deserializing will always be caught and returned via the
+handler's return values, even if `DeserializeValue()` is called directly.
+
+
 ## Options:
 The following serialization options are supported:
 * `errorOnUnserializableType`: `boolean` (default true)
@@ -146,6 +227,24 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
+* `async`: `boolean` (default false)
+  * `true`: the API returns a coroutine that performs the serialization
+  * `false`: the API performs the serialization directly
+* `yieldCheck`: `function(t) => boolean` (default impl yields after 4096 items)
+  * Only applicable when serializing asynchronously. If specified, the function
+    will be called every time an item is about to be serialized. If the function
+    returns true, the coroutine will yield. The function is passed a "scratch"
+    table into which it can persist state.
+
+The following deserialization options are supported
+* `async`: `boolean` (default false)
+  * `true`: the API returns a coroutine that performs the deserialization
+  * `false`: the API performs the deserialization directly
+* `yieldCheck`: `function(t) => boolean` (default impl yields after 4096 items)
+  * Only applicable when deserializing asynchronously. If specified, the function
+    will be called every time an item is about to be deserialized. If the function
+    returns true, the coroutine will yield. The function is passed a "scratch"
+    table into which it can persist state.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -225,6 +324,29 @@ the following possible keys:
     assert(tab.nested.a == 1)
     assert(tab.nested.b == nil)
     assert(tab.nested.c == nil)
+    ```
+
+5. You may perform the serialization and deserialization operations asynchronously,
+   to avoid blocking for excessive durations when handling large amounts of data.
+    ```lua
+    local t = { "test", [false] = {} }
+    t[ t[false] ] = "hello"
+    local co_handler = LibSerialize:SerializeAsync(t, "extra")
+    local completed, serialized
+    repeat
+        completed, serialized = co_handler()
+    until completed
+
+    local tab, str
+    co_handler = LibSerialize:DeserializeAsync(serialized)
+    repeat
+        completed, success, tab, str = co_handler()
+    until completed
+
+    assert(success)
+    assert(tab[1] == "test")
+    assert(tab[ tab[false] ] == "hello")
+    assert(str == "extra")
     ```
 
 

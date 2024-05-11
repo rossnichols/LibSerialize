@@ -33,7 +33,7 @@ The following projects served as inspiration for aspects of this project:
 
 -- Latest version can be found at https://github.com/rossnichols/LibSerialize.
 
---[[ BEGIN_README
+--[[
 # LibSerialize
 
 LibSerialize is a Lua library for efficiently serializing/deserializing arbitrary values.
@@ -97,30 +97,6 @@ function MyAddon:OnCommReceived(prefix, payload, distribution, sender)
 
     -- Handle `data`
 end
-
--- Async Mode - Used in WoW to prevent locking the game while processing.
--- Serialize data:
-local processing = CreateFrame('Frame')
-local handler = LibSerialize:SerializeAsync(tbl)
-processing:SetScript('OnUpdate', function()
-    local completed, serialized = handler()
-    if completed then
-        processing:SetScript('OnUpdate', nil)
-            -- Do something with `serialized`
-        end
-    end
-)
-
--- Deserialize data:
-local handler = LibSerialize:DeserializeAsync(str)
-processing:SetScript('OnUpdate', function()
-    local completed, success, deserialized = handler()
-    if completed then
-        processing:SetScript('OnUpdate', nil)
-            -- Do something with `deserialized`
-        end
-    end
-)
 ```
 
 
@@ -128,7 +104,7 @@ processing:SetScript('OnUpdate', function()
 * **`LibSerialize:SerializeEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (optional, see below)
+    * `opts`: options (see below)
     * `...`: a variable number of serializable values
 
     Returns:
@@ -147,17 +123,16 @@ processing:SetScript('OnUpdate', function()
 * **`LibSerialize:Deserialize(input)`**
 
     Arguments:
-    * `input`: a string previously returned from a LibSerialize serialization API
+    * `input`: a string previously returned from `LibSerialize:Serialize()`
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
     * `...`: the deserialized value(s), or a string containing the encountered Lua error
 
-* **`LibSerialize:DeserializeValue(input, opts)`**
+* **`LibSerialize:DeserializeValue(input)`**
 
     Arguments:
-    * `input`: a string previously returned from a LibSerialize serialization API
-    * `opts`: options (optional, see below)
+    * `input`: a string previously returned from `LibSerialize:Serialize()`
 
     Returns:
     * `...`: the deserialized value(s)
@@ -190,62 +165,6 @@ should be avoided. Table serialization is multi-phased and assumes a consistent
 state for the key/value pairs across the phases.
 
 
-## Asynchronous API
-
-* **`LibSerialize:SerializeAsyncEx(opts, ...)`**
-
-    Arguments:
-    * `opts`: options (optional, see below)
-    * `...`: a variable number of serializable values
-
-    Returns:
-    * `handler`: function to run the process. This should be run until the
-      first returned value is false.
-      `handler` returns:
-      * `completed`: a boolean indicating whether serialization is finished
-      * `result`: once complete, `...` serialized as a string
-
-    Calls `SerializeEx(opts, ...)` with the specified options, as well as setting
-    the `async` option to true (see below).
-
-* **`LibSerialize:SerializeAsync(...)`**
-
-    Arguments:
-    * `...`: a variable number of serializable values
-
-    Returns:
-    * `handler`: function to run the process. This should be run until the
-      first returned value is false.
-      `handler` returns:
-      * `completed`: a boolean indicating whether serialization is finished
-      * `result`: once complete, `...` serialized as a string
-
-    Calls `SerializeEx(opts, ...)` with the default options, as well as setting
-    the `async` option to true (see below).
-
-* **`LibSerialize:DeserializeAsync(input, opts)`**
-
-    Arguments:
-    * `input`: a string previously returned from a LibSerialize serialization API
-    * `opts`: options (optional, see below)
-
-    Returns:
-    * `handler`: function to run the process. This should be run until the
-      first returned value is false.
-      `handler` returns:
-      * `completed`: a boolean indicating whether deserialization is finished
-      * `success`: once complete, a boolean indicating if deserialization was successful
-      * `...`: once complete, the deserialized value(s), or a string containing the
-        encountered Lua error
-
-    Calls `DeserializeValue(opts, ...)` with the specified options, as well as setting
-    the `async` option to true (see below).
-
-Errors encountered when serializing behave the same way as the synchronous APIs.
-Errors encountered when deserializing will always be caught and returned via the
-handler's return values, even if `DeserializeValue()` is called directly.
-
-
 ## Options:
 The following serialization options are supported:
 * `errorOnUnserializableType`: `boolean` (default true)
@@ -263,24 +182,6 @@ The following serialization options are supported:
     table encountered during serialization. The function must return true for
     the pair to be serialized. It may be called multiple times on a table for
     the same key/value pair. See notes on reeentrancy and table modification.
-* `async`: `boolean` (default false)
-  * `true`: the API returns a coroutine that performs the serialization
-  * `false`: the API performs the serialization directly
-* `yieldCheck`: `function(t) => boolean` (default impl yields after 4096 items)
-  * Only applicable when serializing asynchronously. If specified, the function
-    will be called every time an item is about to be serialized. If the function
-    returns true, the coroutine will yield. The function is passed a "scratch"
-    table into which it can persist state.
-
-The following deserialization options are supported
-* `async`: `boolean` (default false)
-  * `true`: the API returns a coroutine that performs the deserialization
-  * `false`: the API performs the deserialization directly
-* `yieldCheck`: `function(t) => boolean` (default impl yields after 4096 items)
-  * Only applicable when deserializing asynchronously. If specified, the function
-    will be called every time an item is about to be deserialized. If the function
-    returns true, the coroutine will yield. The function is passed a "scratch"
-    table into which it can persist state.
 
 If an option is unspecified in the table, then its default will be used.
 This means that if an option `foo` defaults to true, then:
@@ -362,29 +263,6 @@ the following possible keys:
     assert(tab.nested.c == nil)
     ```
 
-5. You may perform the serialization and deserialization operations asynchronously,
-   to avoid blocking for excessive durations when handling large amounts of data.
-    ```lua
-    local t = { "test", [false] = {} }
-    t[ t[false] ] = "hello"
-    local co_handler = LibSerialize:SerializeAsync(t, "extra")
-    local completed, serialized
-    repeat
-        completed, serialized = co_handler()
-    until completed
-
-    local tab, str
-    co_handler = LibSerialize:DeserializeAsync(serialized)
-    repeat
-        completed, success, tab, str = co_handler()
-    until completed
-
-    assert(success)
-    assert(tab[1] == "test")
-    assert(tab[ tab[false] ] == "hello")
-    assert(str == "extra")
-    ```
-
 
 ## Encoding format:
 Every object is encoded as a type byte followed by type-dependent payload.
@@ -428,9 +306,9 @@ The type byte uses the following formats to implement the above:
     * Followed by a byte for the upper bits
 * `TTTT T000`: a 5 bit type index
     * Followed by the type-dependent payload, including count(s) if needed
-END_README --]]
+--]]
 
-local MAJOR, MINOR = "LibSerialize", 5
+local MAJOR, MINOR = "LibSerialize", 4
 local LibSerialize
 if LibStub then
     LibSerialize = LibStub:NewLibrary(MAJOR, MINOR)
@@ -445,11 +323,6 @@ end
 -- we need to support both 1 and 2 as v1 serialization versions.
 local SERIALIZATION_VERSION = 1
 local DESERIALIZATION_VERSION = 2
-
-
---[[---------------------------------------------------------------------------
-    Local overrides of otherwise global library functions
---]]---------------------------------------------------------------------------
 
 local assert = assert
 local error = error
@@ -472,10 +345,6 @@ local string_sub = string.sub
 local table_concat = table.concat
 local table_insert = table.insert
 local table_sort = table.sort
-local coroutine_create = coroutine.create
-local coroutine_status = coroutine.status
-local coroutine_resume = coroutine.resume
-local coroutine_yield = coroutine.yield
 
 -- Compatibility shim to allow the library to work on Lua 5.4
 local unpack = unpack or table.unpack
@@ -498,32 +367,10 @@ local ldexp = math.ldexp or function(m, e)
     return m * 2 ^ e
 end
 
-
---[[---------------------------------------------------------------------------
-    Library defaults.
---]]---------------------------------------------------------------------------
-
-local defaultYieldCheck = function(self)
-    self._currentObjectCount = self._currentObjectCount or 0
-    if self._currentObjectCount > 4096 then
-        self._currentObjectCount = 0
-        return true
-    end
-    self._currentObjectCount = self._currentObjectCount + 1
-end
-local defaultSerializeOptions = {
+local defaultOptions = {
     errorOnUnserializableType = true,
     stable = false,
     filter = nil,
-    async = false,
-    yieldCheck = defaultYieldCheck,
-}
-local defaultAsyncOptions = {
-    async = true,
-}
-local defaultDeserializeOptions = {
-    async = false,
-    yieldCheck = defaultYieldCheck,
 }
 
 local canSerializeFnOptions = {
@@ -639,7 +486,7 @@ local function CreateWriter()
 
     -- Write the entire string into the writer.
     local function WriteString(str)
-        -- DebugPrint("Writing string:", str, #str, bufferSize)
+        -- DebugPrint("Writing string:", str, #str)
         bufferSize = bufferSize + 1
         buffer[bufferSize] = str
     end
@@ -803,144 +650,50 @@ end
 
 local LibSerializeInt = {}
 
-local function CreateSerializer(opts, ...)
-    local ser = {}
+local function CreateSerializer(opts)
+    local state = {}
 
     -- Copy the state from LibSerializeInt.
     for k, v in pairs(LibSerializeInt) do
-        ser[k] = v
+        state[k] = v
     end
 
     -- Initialize string/table reference storage.
-    ser._stringRefs = {}
-    ser._tableRefs = {}
+    state._stringRefs = {}
+    state._tableRefs = {}
 
     -- Create the writer functions.
-    ser._writeString, ser._flushWriter = CreateWriter()
+    state._writeString, state._flushWriter = CreateWriter()
 
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
-    ser._opts = {}
-    for k, v in pairs(defaultSerializeOptions) do
-        ser._opts[k] = v
+    state._opts = {}
+    for k, v in pairs(defaultOptions) do
+        state._opts[k] = v
     end
     for k, v in pairs(opts) do
-        ser._opts[k] = v
+        state._opts[k] = v
     end
 
-    -- This will be passed to the yieldCheck function
-    if ser._opts.async then
-        ser._yieldCheckScratch = {}
-    end
-
-    -- If the input was passed to this function, stash it away.
-    if select("#", ...) ~= 0 then
-        ser._input = {...}
-        ser._inputLen = select("#", ...)
-    end
-
-    return ser
+    return state
 end
 
-local function Serialize(ser, ...)
-    -- If the input was previously stashed away, use that instead.
-    if ser._input then
-        assert(select("#", ...) == 0, "Input args should only be passed one way")
-        local input = ser._input
-        ser._input = nil
-        return Serialize(ser, unpack(input, 1, ser._inputLen))
-    end
-
-    ser:_WriteByte(SERIALIZATION_VERSION)
-
-    for i = 1, select("#", ...) do
-        local input = select(i, ...)
-        if not ser:_WriteObject(input) then
-            -- An unserializable object was passed as an argument.
-            -- Write nil into its slot so that we deserialize a
-            -- consistent number of objects from the resulting string.
-            ser:_WriteObject(nil)
-        end
-    end
-
-    return ser._flushWriter()
-end
-
-local function CheckSerializationProgress(thread, co_success, result)
-    if not co_success then
-        return error(result)
-    elseif coroutine_status(thread) ~= 'dead' then
-        return false
-    else
-        return true, result
-    end
-end
-
-local function CreateDeserializer(input, opts)
-    local deser = {}
+local function CreateDeserializer(input)
+    local state = {}
 
     -- Copy the state from LibSerializeInt.
     for k, v in pairs(LibSerializeInt) do
-        deser[k] = v
+        state[k] = v
     end
 
     -- Initialize string/table reference storage.
-    deser._stringRefs = {}
-    deser._tableRefs = {}
+    state._stringRefs = {}
+    state._tableRefs = {}
 
     -- Create the reader functions.
-    deser._readBytes, deser._readerBytesLeft = CreateReader(input)
+    state._readBytes, state._readerBytesLeft = CreateReader(input)
 
-    -- Create a combined options table, starting with the defaults
-    -- and then overwriting any user-supplied keys.
-    deser._opts = {}
-    for k, v in pairs(defaultDeserializeOptions) do
-        deser._opts[k] = v
-    end
-    for k, v in pairs(opts) do
-        deser._opts[k] = v
-    end
-
-    -- This will be passed to the yieldCheck function
-    if deser._opts.async then
-        deser._yieldCheckScratch = {}
-    end
-
-    return deser
-end
-
-local function Deserialize(deser)
-    -- Since there's only one compression version currently,
-    -- no extra work needs to be done to decode the data.
-    local version = deser:_ReadByte()
-    assert(version <= DESERIALIZATION_VERSION, "Unknown serialization version!")
-
-    -- Since the objects we read may be nil, we need to explicitly
-    -- track the number of results and assign by index so that we
-    -- can call unpack() successfully at the end.
-    local output = {}
-    local outputSize = 0
-
-    while deser._readerBytesLeft() > 0 do
-        outputSize = outputSize + 1
-        output[outputSize] = deser:_ReadObject()
-    end
-
-    if deser._readerBytesLeft() < 0 then
-        error("Reader went past end of input")
-    end
-
-    return unpack(output, 1, outputSize)
-end
-
-local function CheckDeserializationProgress(thread, co_success, ...)
-    if not co_success then
-        return true, false, ...
-    elseif coroutine_status(thread) ~= "dead" then
-        return false
-    else
-        return true, true, ...
-    end
+    return state
 end
 
 
@@ -963,10 +716,6 @@ end
 --]]---------------------------------------------------------------------------
 
 function LibSerializeInt:_ReadObject()
-    if self._opts.async and self._opts.yieldCheck(self._yieldCheckScratch) then
-        coroutine_yield()
-    end
-
     local value = self:_ReadByte()
 
     if value % 2 == 1 then
@@ -1235,10 +984,6 @@ end
 -- Note that _GetWriteFn will raise a Lua error if it finds an
 -- unserializable type, unless this behavior is suppressed via options.
 function LibSerializeInt:_WriteObject(obj)
-    if self._opts.async and self._opts.yieldCheck(self._yieldCheckScratch) then
-        coroutine_yield()
-    end
-
     local writeFn = self:_GetWriteFn(obj)
     if not writeFn then
         return false
@@ -1584,59 +1329,55 @@ function LibSerialize:IsSerializableType(...)
 end
 
 function LibSerialize:SerializeEx(opts, ...)
-    opts = opts or defaultSerializeOptions
+    local ser = CreateSerializer(opts)
 
-    if opts.async then
-        local ser = CreateSerializer(opts, ...)
-        local thread = coroutine_create(Serialize)
-        local inputSize = select("#", ...)
-        local input = {...}
+    ser:_WriteByte(SERIALIZATION_VERSION)
 
-        -- return coroutine handler
-        return function()
-            return CheckSerializationProgress(thread, coroutine_resume(thread, ser))
+    for i = 1, select("#", ...) do
+        local input = select(i, ...)
+        if not ser:_WriteObject(input) then
+            -- An unserializable object was passed as an argument.
+            -- Write nil into its slot so that we deserialize a
+            -- consistent number of objects from the resulting string.
+            ser:_WriteObject(nil)
         end
-    else
-        return Serialize(CreateSerializer(opts), ...)
     end
+
+    return ser._flushWriter()
 end
 
 function LibSerialize:Serialize(...)
-    return self:SerializeEx(defaultSerializeOptions, ...)
+    return self:SerializeEx(defaultOptions, ...)
 end
 
-function LibSerialize:SerializeAsync(...)
-    return self:SerializeEx(defaultAsyncOptions, ...)
-end
+function LibSerialize:DeserializeValue(input)
+    local deser = CreateDeserializer(input)
 
-function LibSerialize:SerializeAsyncEx(opts, ...)
-    opts = opts or defaultAsyncOptions
-    opts.async = true
-    return self:SerializeEx(opts, ...)
-end
+    -- Since there's only one compression version currently,
+    -- no extra work needs to be done to decode the data.
+    local version = deser:_ReadByte()
+    assert(version <= DESERIALIZATION_VERSION, "Unknown serialization version!")
 
-function LibSerialize:DeserializeValue(input, opts)
-    opts = opts or defaultDeserializeOptions
-    local deser = CreateDeserializer(input, opts)
+    -- Since the objects we read may be nil, we need to explicitly
+    -- track the number of results and assign by index so that we
+    -- can call unpack() successfully at the end.
+    local output = {}
+    local outputSize = 0
 
-    if opts.async then
-        local thread = coroutine_create(Deserialize)
-        return function()
-            return CheckDeserializationProgress(thread, coroutine_resume(thread, deser))
-        end
-    else
-        return Deserialize(deser)
+    while deser._readerBytesLeft() > 0 do
+        outputSize = outputSize + 1
+        output[outputSize] = deser:_ReadObject()
     end
+
+    if deser._readerBytesLeft() < 0 then
+        error("Reader went past end of input")
+    end
+
+    return unpack(output, 1, outputSize)
 end
 
 function LibSerialize:Deserialize(input)
     return pcall(self.DeserializeValue, self, input)
-end
-
-function LibSerialize:DeserializeAsync(input, opts)
-    opts = opts or defaultAsyncOptions
-    opts.async = true
-    return self:DeserializeValue(input, opts)
 end
 
 return LibSerialize

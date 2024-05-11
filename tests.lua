@@ -1,11 +1,7 @@
 local LibSerialize = LibStub and LibStub:GetLibrary("LibSerialize") or require("LibSerialize")
 
-local pairs = pairs
-local type = type
-local tostring = tostring
-local assert = assert
+-- Compatibility with Lua 5.4
 local unpack = unpack or table.unpack
-local pcall = pcall
 
 function LibSerialize:RunTests()
     --[[---------------------------------------------------------------------------
@@ -64,6 +60,27 @@ function LibSerialize:RunTests()
         assert(tab.nested.a == 1)
         assert(tab.nested.b == nil)
         assert(tab.nested.c == nil)
+    end
+
+    do
+        local t = { "test", [false] = {} }
+        t[ t[false] ] = "hello"
+        local co_handler = LibSerialize:SerializeAsync(t, "extra")
+        local completed, serialized
+        repeat
+            completed, serialized = co_handler()
+        until completed
+
+        local tab, str
+        co_handler = LibSerialize:DeserializeAsync(serialized)
+        repeat
+            completed, success, tab, str = co_handler()
+        until completed
+
+        assert(success)
+        assert(tab[1] == "test")
+        assert(tab[ tab[false] ] == "hello")
+        assert(str == "extra")
     end
 
 
@@ -146,6 +163,48 @@ function LibSerialize:RunTests()
 
 
     --[[---------------------------------------------------------------------------
+        Test of Async Mode
+    --]]---------------------------------------------------------------------------
+    do
+        local t = { "test", [false] = {} }
+        t[ t[false] ] = "hello"
+        local co_handler = LibSerialize:SerializeAsyncEx({
+            yieldCheck = function(self)
+                self._currentObjectCount = self._currentObjectCount or 0
+                if self._currentObjectCount > 1 then
+                    self._currentObjectCount = 0
+                    return true
+                end
+                self._currentObjectCount = self._currentObjectCount + 1
+            end
+        }, t, "extra")
+        local completed, serialized
+        repeat
+            completed, serialized = co_handler()
+        until completed
+
+        local tab
+        co_handler = LibSerialize:DeserializeAsync(serialized, {
+            yieldCheck = function(self)
+                self._currentObjectCount = self._currentObjectCount or 0
+                if self._currentObjectCount > 1 then
+                    self._currentObjectCount = 0
+                    return true
+                end
+                self._currentObjectCount = self._currentObjectCount + 1
+            end
+        })
+        repeat
+            completed, success, tab, str = co_handler()
+        until completed
+
+        assert(success)
+        assert(tab[1] == "test")
+        assert(tab[ tab[false] ] == "hello")
+        assert(str == "extra")
+    end
+
+    --[[---------------------------------------------------------------------------
         Utilities
     --]]---------------------------------------------------------------------------
 
@@ -186,23 +245,41 @@ function LibSerialize:RunTests()
         Test cases for serialization
     --]]---------------------------------------------------------------------------
 
-    local function fail(index, fromVer, toVer, value, desc)
-        assert(false, ("Test #%d failed (serialization ver: %s, deserialization ver: %s) (%s): %s"):format(index, fromVer, toVer, tostring(value), desc))
+    local function fail(index, fromVer, toVer, value, desc, async)
+        assert(false, ("Test #%d failed (serialization ver: %s, deserialization ver: %s, async: %s) (%s): %s"):format(index, fromVer, toVer, tostring(async), tostring(value), desc))
     end
 
     local function testfilter(t, k, v)
         return k ~= "banned" and v ~= "banned"
     end
 
-    local function check(index, fromVer, from, toVer, to, value, bytelen, cmp)
-        local serialized = from:SerializeEx({ errorOnUnserializableType = false, filter = testfilter }, value)
-        if #serialized ~= bytelen then
-            fail(index, fromVer, toVer, value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen))
+    local function check(index, fromVer, from, toVer, to, value, bytelen, cmp, async)
+        local completed, success, serialized, deserialized
+
+        if async then
+            local co_handler = from:SerializeAsyncEx({ errorOnUnserializableType = false, filter = testfilter, yieldCheck = function() return true end }, value)
+            repeat
+                completed, serialized = co_handler()
+            until completed
+        else
+            serialized = from:SerializeEx({ errorOnUnserializableType = false, filter = testfilter }, value)
         end
 
-        local success, deserialized = to:Deserialize(serialized)
+        if #serialized ~= bytelen then
+            fail(index, fromVer, toVer, value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen), true)
+        end
+
+        if async then
+            local co_handler = to:DeserializeAsync(serialized, { yieldCheck = function() return true end })
+            repeat
+                completed, success, deserialized = co_handler()
+            until completed
+        else
+            success, deserialized = to:Deserialize(serialized)
+        end
+
         if not success then
-            fail(index, fromVer, toVer, value, ("Deserialization failed: %s"):format(deserialized))
+            fail(index, fromVer, toVer, value, ("Deserialization failed: %s"):format(deserialized), true)
         end
 
         -- Tests involving NaNs will be compared in string form.
@@ -221,6 +298,7 @@ function LibSerialize:RunTests()
 
     local function checkLatest(index, value, bytelen, cmp)
         check(index, "latest", LibSerialize, "latest", LibSerialize, value, bytelen, cmp)
+        check(index, "latest", LibSerialize, "latest", LibSerialize, value, bytelen, cmp, true)
     end
 
     -- Format: each test case is { value, bytelen, cmp, earliest }. The value will be serialized
@@ -313,6 +391,7 @@ function LibSerialize:RunTests()
             { "v1.1.0", require("archive.LibSerialize-v1-1-0") },
             -- v1.1.1 skipped due to bug with serialization version causing known failures.
             { "v1.1.2", require("archive.LibSerialize-v1-1-2") },
+            { "v1.1.3", require("archive.LibSerialize-v1-1-3") },
             { "latest", LibSerialize },
         }
 
@@ -340,8 +419,18 @@ function LibSerialize:RunTests()
         print,
     }
 
+    local function doAsyncSerialize(value)
+        local co_handler = LibSerialize:SerializeAsync({ yieldCheck = function() return true end }, value)
+        repeat
+            completed, serialized = co_handler()
+        until completed
+    end
+
     for _, testCase in ipairs(failCases) do
         local success = pcall(LibSerialize.Serialize, LibSerialize, testCase)
+        assert(success == false)
+
+        local success = pcall(doAsyncSerialize, testCase)
         assert(success == false)
     end
 
