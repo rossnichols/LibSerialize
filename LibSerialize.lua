@@ -33,7 +33,7 @@ The following projects served as inspiration for aspects of this project:
 
 -- Latest version can be found at https://github.com/rossnichols/LibSerialize.
 
---[[
+--[[ BEGIN_README
 # LibSerialize
 
 LibSerialize is a Lua library for efficiently serializing/deserializing arbitrary values.
@@ -306,7 +306,7 @@ The type byte uses the following formats to implement the above:
     * Followed by a byte for the upper bits
 * `TTTT T000`: a 5 bit type index
     * Followed by the type-dependent payload, including count(s) if needed
---]]
+END_README --]]
 
 local MAJOR, MINOR = "LibSerialize", 4
 local LibSerialize
