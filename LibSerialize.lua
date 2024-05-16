@@ -664,12 +664,6 @@ local function GetValueByKeyOrDefault(object, key, default)
     end
 end
 
--- Implements the default end-of-stream check for a reader. This requires
--- that the supplied input object supports the length operator.
-local function HasReachedInputEnd(input, offset)
-    return offset > #input
-end
-
 -- Returns whether the value (a number) is NaN.
 local function IsNaN(value)
     -- With floating point optimizations enabled all comparisons involving
@@ -749,55 +743,23 @@ end
     Helpers for reading/writing streams of bytes from/to a string
 --]]---------------------------------------------------------------------------
 
--- Creates a writer to lazily construct a string over multiple writes.
+-- Functions for a writer that will lazily construct a string over multiple writes.
+local function BufferedWriter_WriteString(self, str)
+    self.bufferSize = self.bufferSize + 1
+    self.buffer[self.bufferSize] = str
+end
+
+local function BufferedWriter_FlushBuffer(self)
+    local flushed = table_concat(self.buffer, "", 1, self.bufferSize)
+    self.bufferSize = 0
+    return flushed
+end
+
+-- Creates a writer object that will be called to write the serialized output.
 -- Return values:
--- 1. WriteString(str)
--- 2. FlushWriter()
-
-local function CreateBufferedWriter()
-    local bufferSize = 0
-    local buffer = {}
-
-    local function WriteString(str)
-        bufferSize = bufferSize + 1
-        buffer[bufferSize] = str
-    end
-
-    local function FlushWriter()
-        local flushed = table_concat(buffer, "", 1, bufferSize)
-        bufferSize = 0
-        return flushed
-    end
-
-    return WriteString, FlushWriter
-end
-
-local function CreateWriterFromObject(object)
-    -- Note that for custom writers if no Flush implementation is given the
-    -- default is a no-op; this means that no values will be returned to the
-    -- caller of Serialize/SerializeEx. It's expected in such a case that
-    -- you will have written the strings elsewhere yourself; perhaps having
-    -- already submitted them for transmission via a comms API for example.
-
-    local writeString = object.WriteString  -- Assumed to exist.
-    local flushWriter = GetValueByKeyOrDefault(object, "Flush", Noop)
-
-    -- To minimize changes elsewhere with this initial implementation, this
-    -- function must return new closures that bind the 'object' to the first
-    -- parameter of the above functions. This could be optimized to remove the
-    -- indirection, but requires modifying all call sites of these functions.
-
-    local function WriteString(str)
-        writeString(object, str)
-    end
-
-    local function FlushWriter()
-        return flushWriter(object)
-    end
-
-    return WriteString, FlushWriter
-end
-
+-- 1. Writer object
+-- 2. WriteString(obj, str)
+-- 3. FlushWriter(obj)
 local function CreateWriter(object)
     -- If the supplied object implements the required functions to satisfy
     -- the Writer interface, it will be used exclusively. Otherwise if any
@@ -807,40 +769,55 @@ local function CreateWriter(object)
     local writeString = GetValueByKeyOrDefault(object, "WriteString", nil)
 
     if writeString == nil then
-        return CreateBufferedWriter()
+        -- User the default BufferedWriter functions.
+        local object = { bufferSize = 0, buffer = {} }
+        return object, BufferedWriter_WriteString, BufferedWriter_FlushBuffer
     else
-        return CreateWriterFromObject(object)
+        -- Note that for custom writers if no Flush implementation is given the
+        -- default is a no-op; this means that no values will be returned to the
+        -- caller of Serialize/SerializeEx. It's expected in such a case that
+        -- you will have written the strings elsewhere yourself; perhaps having
+        -- already submitted them for transmission via a comms API for example.
+
+        return object, writeString, GetValueByKeyOrDefault(object, "Flush", Noop)
     end
 end
 
--- Creates a reader to sequentially read bytes from the input string.
--- Return values:
--- 1. ReadBytes(bytelen)
--- 2. ReaderAtEnd()
-local function CreateReader(input)
-    local nextPos = 1
+-- Generic reader functions that defer their work to previously defined helpers
+local function Reader_ReadBytes(self, bytelen)
+    local result = self.readBytes(self.input, self.nextPos, self.nextPos + bytelen - 1)
+    self.nextPos = self.nextPos + bytelen
+    return result
+end
 
+local function Reader_AtEnd(self)
+    return self.atEnd(self.input, self.nextPos)
+end
+
+-- Implements the default end-of-stream check for a reader. This requires
+-- that the supplied input object supports the length operator.
+local function HasReachedInputEnd(input, offset)
+    return offset > #input
+end
+
+-- Creates a reader object that will be called to read the to-be-deserialized input.
+-- Return values:
+-- 1. Reader object
+-- 2. ReadBytes(bytelen)
+-- 3. ReaderAtEnd()
+local function CreateReader(input)
     -- We allow any type of input to be given and queried for the custom
     -- reader interface; any errors that arise when attempting to index these
     -- fields are swallowed silently with fallbacks to suitable defaults.
 
-    local readBytes = GetValueByKeyOrDefault(input, "ReadBytes", string_sub)
-    local atEnd = GetValueByKeyOrDefault(input, "AtEnd", HasReachedInputEnd)
+    local object = {
+        input = input,
+        nextPos = 1,
+        readBytes = GetValueByKeyOrDefault(input, "ReadBytes", string_sub),
+        atEnd = GetValueByKeyOrDefault(input, "AtEnd", HasReachedInputEnd),
+    }
 
-    -- Read some bytes from the reader.
-    -- @param bytelen The number of bytes to be read.
-    -- @return the bytes as a string
-    local function ReadBytes(bytelen)
-        local result = readBytes(input, nextPos, nextPos + bytelen - 1)
-        nextPos = nextPos + bytelen
-        return result
-    end
-
-    local function ReaderAtEnd()
-        return atEnd(input, nextPos)
-    end
-
-    return ReadBytes, ReaderAtEnd
+    return object, Reader_ReadBytes, Reader_AtEnd
 end
 
 
@@ -981,7 +958,7 @@ local function CreateSerializer(opts, ...)
     ser._tableRefs = {}
 
     -- Create the writer functions.
-    ser._writeString, ser._flushWriter = CreateWriter(opts.writer)
+    ser._writer, ser._writeString, ser._flushWriter = CreateWriter(opts.writer)
 
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
@@ -1028,7 +1005,7 @@ local function Serialize(ser, ...)
         end
     end
 
-    return ser._flushWriter()
+    return ser._flushWriter(ser._writer)
 end
 
 local function CheckSerializationProgress(thread, co_success, result)
@@ -1054,7 +1031,7 @@ local function CreateDeserializer(input, opts)
     deser._tableRefs = {}
 
     -- Create the reader functions.
-    deser._readBytes, deser._readerAtEnd = CreateReader(input)
+    deser._reader, deser._readBytes, deser._readerAtEnd = CreateReader(input)
 
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
@@ -1086,7 +1063,7 @@ local function Deserialize(deser)
     local output = {}
     local outputSize = 0
 
-    while not deser._readerAtEnd() do
+    while not deser._readerAtEnd(deser._reader) do
         outputSize = outputSize + 1
         output[outputSize] = deser:_ReadObject()
     end
@@ -1213,7 +1190,7 @@ end
 function LibSerializeInt:_ReadString(len)
     -- DebugPrint("Reading string,", len)
 
-    local value = self._readBytes(len)
+    local value = self._readBytes(self._reader, len)
     if len > 2 then
         self:_AddReference(self._stringRefs, value)
     end
@@ -1229,7 +1206,7 @@ end
 function LibSerializeInt:_ReadInt(required)
     -- DebugPrint("Reading int", required)
 
-    return StringToInt(self._readBytes(required), required)
+    return StringToInt(self._readBytes(self._reader, required), required)
 end
 
 function LibSerializeInt:_ReadPair(fn, ...)
@@ -1310,9 +1287,9 @@ LibSerializeInt._ReaderTable = {
     [LibSerializeInt._ReaderIndex.NUM_32_NEG] = function(self) return -self:_ReadInt(4) end,
     [LibSerializeInt._ReaderIndex.NUM_64_POS] = function(self) return self:_ReadInt(7) end,
     [LibSerializeInt._ReaderIndex.NUM_64_NEG] = function(self) return -self:_ReadInt(7) end,
-    [LibSerializeInt._ReaderIndex.NUM_FLOAT]  = function(self) return StringToFloat(self._readBytes(8)) end,
-    [LibSerializeInt._ReaderIndex.NUM_FLOATSTR_POS]  = function(self) return tonumber(self._readBytes(self:_ReadByte())) end,
-    [LibSerializeInt._ReaderIndex.NUM_FLOATSTR_NEG]  = function(self) return -tonumber(self._readBytes(self:_ReadByte())) end,
+    [LibSerializeInt._ReaderIndex.NUM_FLOAT]  = function(self) return StringToFloat(self._readBytes(self._reader, 8)) end,
+    [LibSerializeInt._ReaderIndex.NUM_FLOATSTR_POS]  = function(self) return tonumber(self._readBytes(self._reader, self:_ReadByte())) end,
+    [LibSerializeInt._ReaderIndex.NUM_FLOATSTR_NEG]  = function(self) return -tonumber(self._readBytes(self._reader, self:_ReadByte())) end,
 
     -- Booleans
     [LibSerializeInt._ReaderIndex.BOOL_T] = function(self) return true end,
@@ -1414,7 +1391,7 @@ function LibSerializeInt:_WriteByte(value)
 end
 
 function LibSerializeInt:_WriteInt(n, threshold)
-    self._writeString(IntToString(n, threshold))
+    self._writeString(self._writer, IntToString(n, threshold))
 end
 
 -- Lookup tables to map the number of required bytes to the
@@ -1480,10 +1457,10 @@ LibSerializeInt._WriterTable = {
             if #asString < 7 and tonumber(asString) == numAbs and IsFinite(numAbs) then
                 self:_WriteByte(sign + readerIndexShift * self._ReaderIndex.NUM_FLOATSTR_POS)
                 self:_WriteByte(#asString, 1)
-                self._writeString(asString)
+                self._writeString(self._writer, asString)
             else
                 self:_WriteByte(readerIndexShift * self._ReaderIndex.NUM_FLOAT)
-                self._writeString(FloatToString(num))
+                self._writeString(self._writer, FloatToString(num))
             end
         elseif num > -4096 and num < 4096 then
             -- The type byte supports two modes by which a number can be embedded:
@@ -1539,7 +1516,7 @@ LibSerializeInt._WriterTable = {
                 self:_WriteInt(len, required)
             end
 
-            self._writeString(str)
+            self._writeString(self._writer, str)
             if len > 2 then
                 self:_AddReference(self._stringRefs, str)
             end
