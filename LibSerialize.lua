@@ -743,6 +743,19 @@ end
     Helpers for reading/writing streams of bytes from/to a string
 --]]---------------------------------------------------------------------------
 
+-- Generic writer functions that defer their work to previously defined helpers.
+local function Writer_WriteString(self, str)
+    if self.opts.async and self.opts.yieldCheck(self.asyncScratch) then
+        coroutine_yield()
+    end
+
+    self.writeString(self.writer, str)
+end
+
+local function Writer_FlushWriter(self)
+    return self.flushWriter(self.writer)
+end
+
 -- Functions for a writer that will lazily construct a string over multiple writes.
 local function BufferedWriter_WriteString(self, str)
     self.bufferSize = self.bufferSize + 1
@@ -760,18 +773,26 @@ end
 -- 1. Writer object
 -- 2. WriteString(obj, str)
 -- 3. FlushWriter(obj)
-local function CreateWriter(object)
+local function CreateWriter(opts)
     -- If the supplied object implements the required functions to satisfy
     -- the Writer interface, it will be used exclusively. Otherwise if any
     -- of those are missing, the object is entirely ignored and we'll use
     -- the original buffer-of-strings approach.
 
-    local writeString = GetValueByKeyOrDefault(object, "WriteString", nil)
+    local object = {
+        opts = opts,
+        asyncScratch = opts.async and {} or nil,
+    }
+
+    local writeString = GetValueByKeyOrDefault(opts.writer, "WriteString", nil)
 
     if writeString == nil then
-        -- User the default BufferedWriter functions.
-        local object = { bufferSize = 0, buffer = {} }
-        return object, BufferedWriter_WriteString, BufferedWriter_FlushBuffer
+        -- Configure the object for the BufferedWriter approach.
+        object.writer = object
+        object.buffer = {}
+        object.bufferSize = 0
+        object.writeString = BufferedWriter_WriteString
+        object.flushWriter = BufferedWriter_FlushBuffer
     else
         -- Note that for custom writers if no Flush implementation is given the
         -- default is a no-op; this means that no values will be returned to the
@@ -779,12 +800,20 @@ local function CreateWriter(object)
         -- you will have written the strings elsewhere yourself; perhaps having
         -- already submitted them for transmission via a comms API for example.
 
-        return object, writeString, GetValueByKeyOrDefault(object, "Flush", Noop)
+        object.writer = opts.writer
+        object.writeString = writeString
+        object.flushWriter = GetValueByKeyOrDefault(opts.writer, "Flush", Noop)
     end
+
+    return object, Writer_WriteString, Writer_FlushWriter
 end
 
--- Generic reader functions that defer their work to previously defined helpers
+-- Generic reader functions that defer their work to previously defined helpers.
 local function Reader_ReadBytes(self, bytelen)
+    if self.opts.async and self.opts.yieldCheck(self.asyncScratch) then
+        coroutine_yield()
+    end
+
     local result = self.readBytes(self.input, self.nextPos, self.nextPos + bytelen - 1)
     self.nextPos = self.nextPos + bytelen
     return result
@@ -805,7 +834,7 @@ end
 -- 1. Reader object
 -- 2. ReadBytes(bytelen)
 -- 3. ReaderAtEnd()
-local function CreateReader(input)
+local function CreateReader(input, opts)
     -- We allow any type of input to be given and queried for the custom
     -- reader interface; any errors that arise when attempting to index these
     -- fields are swallowed silently with fallbacks to suitable defaults.
@@ -813,6 +842,8 @@ local function CreateReader(input)
     local object = {
         input = input,
         nextPos = 1,
+        opts = opts,
+        asyncScratch = opts.async and {} or nil,
         readBytes = GetValueByKeyOrDefault(input, "ReadBytes", string_sub),
         atEnd = GetValueByKeyOrDefault(input, "AtEnd", HasReachedInputEnd),
     }
@@ -957,9 +988,6 @@ local function CreateSerializer(opts, ...)
     ser._stringRefs = {}
     ser._tableRefs = {}
 
-    -- Create the writer functions.
-    ser._writer, ser._writeString, ser._flushWriter = CreateWriter(opts.writer)
-
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
     ser._opts = {}
@@ -970,10 +998,8 @@ local function CreateSerializer(opts, ...)
         ser._opts[k] = v
     end
 
-    -- This will be passed to the yieldCheck function
-    if ser._opts.async then
-        ser._yieldCheckScratch = {}
-    end
+    -- Create the writer.
+    ser._writer, ser._writeString, ser._flushWriter = CreateWriter(ser._opts)
 
     -- If the input was passed to this function, stash it away.
     if select("#", ...) ~= 0 then
@@ -1030,9 +1056,6 @@ local function CreateDeserializer(input, opts)
     deser._stringRefs = {}
     deser._tableRefs = {}
 
-    -- Create the reader functions.
-    deser._reader, deser._readBytes, deser._readerAtEnd = CreateReader(input)
-
     -- Create a combined options table, starting with the defaults
     -- and then overwriting any user-supplied keys.
     deser._opts = {}
@@ -1043,10 +1066,8 @@ local function CreateDeserializer(input, opts)
         deser._opts[k] = v
     end
 
-    -- This will be passed to the yieldCheck function
-    if deser._opts.async then
-        deser._yieldCheckScratch = {}
-    end
+    -- Create the reader.
+    deser._reader, deser._readBytes, deser._readerAtEnd = CreateReader(input, deser._opts)
 
     return deser
 end
@@ -1101,10 +1122,6 @@ end
 --]]---------------------------------------------------------------------------
 
 function LibSerializeInt:_ReadObject()
-    if self._opts.async and self._opts.yieldCheck(self._yieldCheckScratch) then
-        coroutine_yield()
-    end
-
     local value = self:_ReadByte()
 
     if value % 2 == 1 then
@@ -1373,10 +1390,6 @@ end
 -- Note that _GetWriteFn will raise a Lua error if it finds an
 -- unserializable type, unless this behavior is suppressed via options.
 function LibSerializeInt:_WriteObject(obj)
-    if self._opts.async and self._opts.yieldCheck(self._yieldCheckScratch) then
-        coroutine_yield()
-    end
-
     local writeFn = self:_GetWriteFn(obj)
     if not writeFn then
         return false
