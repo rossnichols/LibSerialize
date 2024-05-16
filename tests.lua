@@ -265,7 +265,7 @@ function LibSerialize:RunTests()
         { -1.5, 6 },
         { -123.45678901235, 10 },
         { -148921291233.23, 10 },
-        { 0/0, 10 },  -- -1.#IND or -nan(ind)
+        { 0/0, 10, nil, 3 },  -- -1.#IND or -nan(ind)
         { 1/0, 10, nil, 3 },  -- 1.#INF or inf
         { -1/0, 10, nil, 3 }, -- -1.#INF or -inf
         { "", 2 },
