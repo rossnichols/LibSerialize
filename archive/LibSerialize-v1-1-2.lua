@@ -329,13 +329,10 @@ local getmetatable = getmetatable
 local pairs = pairs
 local ipairs = ipairs
 local select = select
-local unpack = unpack
 local type = type
 local tostring = tostring
 local tonumber = tonumber
 local max = math.max
-local frexp = math.frexp
-local ldexp = math.ldexp
 local floor = math.floor
 local math_modf = math.modf
 local math_huge = math.huge
@@ -345,6 +342,27 @@ local string_sub = string.sub
 local table_concat = table.concat
 local table_insert = table.insert
 local table_sort = table.sort
+
+-- Compatibility shim to allow the library to work on Lua 5.4
+local unpack = unpack or table.unpack
+local frexp = math.frexp or function(num)
+    if num == math_huge then return num end
+    local fraction, exponent = num, 0
+    if fraction ~= 0 then
+        while fraction >= 1 do
+            fraction = fraction / 2
+            exponent = exponent + 1
+        end
+        while fraction < 0.5 do
+            fraction = fraction * 2
+            exponent = exponent - 1
+        end
+    end
+    return fraction, exponent
+end
+local ldexp = math.ldexp or function(m, e)
+    return m * 2 ^ e
+end
 
 local defaultOptions = {
     errorOnUnserializableType = true,

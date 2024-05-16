@@ -4,7 +4,7 @@ local pairs = pairs
 local type = type
 local tostring = tostring
 local assert = assert
-local unpack = unpack
+local unpack = unpack or table.unpack
 local pcall = pcall
 
 function LibSerialize:RunTests()
@@ -309,10 +309,10 @@ function LibSerialize:RunTests()
 
     if require then
         local versions = {
-            { "v1.0.0", require("archive\\LibSerialize-v1-0-0") },
-            { "v1.1.0", require("archive\\LibSerialize-v1-1-0") },
+            { "v1.0.0", require("archive.LibSerialize-v1-0-0") },
+            { "v1.1.0", require("archive.LibSerialize-v1-1-0") },
             -- v1.1.1 skipped due to bug with serialization version causing known failures.
-            { "v1.1.2", require("archive\\LibSerialize-v1-1-2") },
+            { "v1.1.2", require("archive.LibSerialize-v1-1-2") },
             { "latest", LibSerialize },
         }
 
