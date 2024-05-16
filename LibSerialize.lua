@@ -825,7 +825,7 @@ end
 
 -- Implements the default end-of-stream check for a reader. This requires
 -- that the supplied input object supports the length operator.
-local function HasReachedInputEnd(input, offset)
+local function GenericReader_AtEnd(input, offset)
     return offset > #input
 end
 
@@ -845,7 +845,7 @@ local function CreateReader(input, opts)
         opts = opts,
         asyncScratch = opts.async and {} or nil,
         readBytes = GetValueByKeyOrDefault(input, "ReadBytes", string_sub),
-        atEnd = GetValueByKeyOrDefault(input, "AtEnd", HasReachedInputEnd),
+        atEnd = GetValueByKeyOrDefault(input, "AtEnd", GenericReader_AtEnd),
     }
 
     return object, Reader_ReadBytes, Reader_AtEnd
