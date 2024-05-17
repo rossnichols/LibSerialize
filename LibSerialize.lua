@@ -101,26 +101,24 @@ end
 -- Async Mode - Used in WoW to prevent locking the game while processing.
 -- Serialize data:
 local processing = CreateFrame("Frame")
-local handler = LibSerialize:SerializeAsync(tbl)
+local handler = LibSerialize:SerializeAsync(data_to_serialize)
 processing:SetScript("OnUpdate", function()
     local completed, serialized = handler()
     if completed then
         processing:SetScript("OnUpdate", nil)
         -- Do something with `serialized`
-        end
     end
-)
+end)
 
 -- Deserialize data:
-local handler = LibSerialize:DeserializeAsync(str)
+local handler = LibSerialize:DeserializeAsync(serialized)
 processing:SetScript("OnUpdate", function()
     local completed, success, deserialized = handler()
     if completed then
         processing:SetScript("OnUpdate", nil)
         -- Do something with `deserialized`
-        end
     end
-)
+end)
 ```
 
 
