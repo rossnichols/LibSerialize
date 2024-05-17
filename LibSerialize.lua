@@ -100,24 +100,24 @@ end
 
 -- Async Mode - Used in WoW to prevent locking the game while processing.
 -- Serialize data:
-local processing = CreateFrame('Frame')
+local processing = CreateFrame("Frame")
 local handler = LibSerialize:SerializeAsync(tbl)
-processing:SetScript('OnUpdate', function()
+processing:SetScript("OnUpdate", function()
     local completed, serialized = handler()
     if completed then
-        processing:SetScript('OnUpdate', nil)
-            -- Do something with `serialized`
+        processing:SetScript("OnUpdate", nil)
+        -- Do something with `serialized`
         end
     end
 )
 
 -- Deserialize data:
 local handler = LibSerialize:DeserializeAsync(str)
-processing:SetScript('OnUpdate', function()
+processing:SetScript("OnUpdate", function()
     local completed, success, deserialized = handler()
     if completed then
-        processing:SetScript('OnUpdate', nil)
-            -- Do something with `deserialized`
+        processing:SetScript("OnUpdate", nil)
+        -- Do something with `deserialized`
         end
     end
 )
@@ -152,13 +152,15 @@ processing:SetScript('OnUpdate', function()
 
     Returns:
     * `success`: a boolean indicating if deserialization was successful
-    * `...`: the deserialized value(s), or a string containing the encountered Lua error
+    * `...`: the deserialized value(s) if successful, or a string containing the encountered
+      Lua error
 
 * **`LibSerialize:DeserializeValue(input, opts)`**
 
     Arguments:
     * `input`: a string previously returned from a LibSerialize serialization API,
       or an object that implements the [Reader protocol]
+    * `opts`: options (see [Deserialization Options])
 
     Returns:
     * `...`: the deserialized value(s)
@@ -203,18 +205,19 @@ does not affect the `DeserializeValue()` function.
 * **`LibSerialize:SerializeAsyncEx(opts, ...)`**
 
     Arguments:
-    * `opts`: options (optional, see below)
+    * `opts`: options (optional, see [Serialization Options])
     * `...`: a variable number of serializable values
 
     Returns:
-    * `handler`: function to run the process. This should be run until the
-      first returned value is false.
+    * `handler`: function that performs the serialization. This should be called with
+      no arguments until the  first returned value is false.
       `handler` returns:
       * `completed`: a boolean indicating whether serialization is finished
       * `result`: once complete, `...` serialized as a string
 
     Calls `SerializeEx(opts, ...)` with the specified options, as well as setting
-    the `async` option to true (see below).
+    the `async` option to true (see [Serialization Options]). Note that the passed-in
+    table is written to when doing so.
 
 * **`LibSerialize:SerializeAsync(...)`**
 
@@ -222,36 +225,39 @@ does not affect the `DeserializeValue()` function.
     * `...`: a variable number of serializable values
 
     Returns:
-    * `handler`: function to run the process. This should be run until the
-      first returned value is false.
+    * `handler`: function that performs the serialization. This should be called with
+      no arguments until the  first returned value is false.
       `handler` returns:
       * `completed`: a boolean indicating whether serialization is finished
       * `result`: once complete, `...` serialized as a string
 
     Calls `SerializeEx(opts, ...)` with the default options, as well as setting
-    the `async` option to true (see below).
+    the `async` option to true (see [Serialization Options]). Note that the passed-in
+    table is written to when doing so.
 
 * **`LibSerialize:DeserializeAsync(input, opts)`**
 
     Arguments:
     * `input`: a string previously returned from a LibSerialize serialization API
-    * `opts`: options (optional, see below)
+    * `opts`: options (optional, see [Deserialization Options])
 
     Returns:
-    * `handler`: function to run the process. This should be run until the
-      first returned value is false.
+    * `handler`: function that performs the deserialization. This should be called with
+      no arguments until the  first returned value is false.
       `handler` returns:
       * `completed`: a boolean indicating whether deserialization is finished
       * `success`: once complete, a boolean indicating if deserialization was successful
-      * `...`: once complete, the deserialized value(s), or a string containing the
-        encountered Lua error
+      * `...`: once complete, the deserialized value(s) if successful, or a string containing
+        the encountered Lua error
 
     Calls `DeserializeValue(opts, ...)` with the specified options, as well as setting
-    the `async` option to true (see below).
+    the `async` option to true (see [Deserialization Options]). Note that the passed-in
+    table is written to when doing so.
 
 Errors encountered when serializing behave the same way as the synchronous APIs.
 Errors encountered when deserializing will always be caught and returned via the
-handler's return values, even if `DeserializeValue()` is called directly.
+handler's return values, even if `DeserializeValue()` is called directly. This is
+different than when calling `DeserializeValue()` in synchronous mode.
 
 
 ## Serialization Options
@@ -284,6 +290,8 @@ The following serialization options are supported:
     if it implements the [Writer protocol]. If so, the functions it defines
     will be used to control how serialized data is written.
 
+
+## Deserialization Options
 The following deserialization options are supported:
 * `async`: `boolean` (default false)
   * `true`: the API returns a coroutine that performs the deserialization
@@ -445,6 +453,8 @@ the following possible keys:
 
 5. You may perform the serialization and deserialization operations asynchronously,
    to avoid blocking for excessive durations when handling large amounts of data.
+   Note that you wouldn't call the handlers in a repeat-until loop like below, because
+   then you're still effectively performing the operations synchronously.
     ```lua
     local t = { "test", [false] = {} }
     t[ t[false] ] = "hello"
@@ -555,6 +565,7 @@ The type byte uses the following formats to implement the above:
     * Followed by the type-dependent payload, including count(s) if needed
 
 [Serialization Options]: #serialization-options
+[Deserialization Options]: #deserialization-options
 [Reader protocol]: #reader-protocol
 [Writer protocol]: #writer-protocol
 END_README --]]
