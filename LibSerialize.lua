@@ -466,6 +466,50 @@ the following possible keys:
     assert(str == "extra")
     ```
 
+6. You may use the Reader and Writer protocols to have more control over writing the
+   results of serialization, or how those results are read when deserializing. The below
+   example implements the default behavior of the library using these protocols.
+    ```lua
+    local t = { a = 1, b = 2, c = 3 }
+
+    local StandardWriter = {}
+    function StandardWriter:Initialize()
+        self.buffer = {}
+        self.bufferSize = 0
+    end
+    function StandardWriter:WriteString(str)
+        self.bufferSize = self.bufferSize + 1
+        self.buffer[self.bufferSize] = str
+    end
+    function StandardWriter:Flush()
+        local flushed = table.concat(self.buffer, "", 1, self.bufferSize)
+        self.bufferSize = 0
+        return flushed
+    end
+
+    local StandardReader = {}
+    function StandardReader:Initialize(input)
+        self.input = input
+    end
+    function StandardReader:ReadBytes(startOffset, endOffset)
+        return string.sub(self.input, startOffset, endOffset)
+    end
+    function StandardReader:AtEnd(offset)
+        return offset > #self.input
+    end
+
+    StandardWriter:Initialize()
+    local serialized = LibSerialize:SerializeEx({ writer = StandardWriter }, t)
+
+    StandardReader:Initialize(serialized)
+    local success, tab = LibSerialize:Deserialize(StandardReader)
+
+    assert(success)
+    assert(tab.a == 1)
+    assert(tab.b == 2)
+    assert(tab.c == 3)
+    ```
+
 
 ## Encoding format
 Every object is encoded as a type byte followed by type-dependent payload.

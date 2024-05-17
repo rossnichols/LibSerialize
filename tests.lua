@@ -83,6 +83,47 @@ function LibSerialize:RunTests()
         assert(str == "extra")
     end
 
+    do
+        local t = { a = 1, b = 2, c = 3 }
+
+        local StandardWriter = {}
+        function StandardWriter:Initialize()
+            self.buffer = {}
+            self.bufferSize = 0
+        end
+        function StandardWriter:WriteString(str)
+            self.bufferSize = self.bufferSize + 1
+            self.buffer[self.bufferSize] = str
+        end
+        function StandardWriter:Flush()
+            local flushed = table.concat(self.buffer, "", 1, self.bufferSize)
+            self.bufferSize = 0
+            return flushed
+        end
+
+        local StandardReader = {}
+        function StandardReader:Initialize(input)
+            self.input = input
+        end
+        function StandardReader:ReadBytes(startOffset, endOffset)
+            return string.sub(self.input, startOffset, endOffset)
+        end
+        function StandardReader:AtEnd(offset)
+            return offset > #self.input
+        end
+
+        StandardWriter:Initialize()
+        local serialized = LibSerialize:SerializeEx({ writer = StandardWriter }, t)
+
+        StandardReader:Initialize(serialized)
+        local success, tab = LibSerialize:Deserialize(StandardReader)
+
+        assert(success)
+        assert(tab.a == 1)
+        assert(tab.b == 2)
+        assert(tab.c == 3)
+    end
+
 
     --[[---------------------------------------------------------------------------
         Test of stable serialization
@@ -163,48 +204,6 @@ function LibSerialize:RunTests()
 
 
     --[[---------------------------------------------------------------------------
-        Test of Async Mode
-    --]]---------------------------------------------------------------------------
-    do
-        local t = { "test", [false] = {} }
-        t[ t[false] ] = "hello"
-        local co_handler = LibSerialize:SerializeAsyncEx({
-            yieldCheck = function(self)
-                self._currentObjectCount = self._currentObjectCount or 0
-                if self._currentObjectCount > 1 then
-                    self._currentObjectCount = 0
-                    return true
-                end
-                self._currentObjectCount = self._currentObjectCount + 1
-            end
-        }, t, "extra")
-        local completed, serialized
-        repeat
-            completed, serialized = co_handler()
-        until completed
-
-        local tab
-        co_handler = LibSerialize:DeserializeAsync(serialized, {
-            yieldCheck = function(self)
-                self._currentObjectCount = self._currentObjectCount or 0
-                if self._currentObjectCount > 1 then
-                    self._currentObjectCount = 0
-                    return true
-                end
-                self._currentObjectCount = self._currentObjectCount + 1
-            end
-        })
-        repeat
-            completed, success, tab, str = co_handler()
-        until completed
-
-        assert(success)
-        assert(tab[1] == "test")
-        assert(tab[ tab[false] ] == "hello")
-        assert(str == "extra")
-    end
-
-    --[[---------------------------------------------------------------------------
         Utilities
     --]]---------------------------------------------------------------------------
 
@@ -256,196 +255,332 @@ function LibSerialize:RunTests()
 
 
     --[[---------------------------------------------------------------------------
-        Test cases for serialization
+        Test of Async Mode
     --]]---------------------------------------------------------------------------
 
-    local function fail(index, fromVer, toVer, value, desc, async)
-        assert(false, ("Test #%d failed (serialization ver: %s, deserialization ver: %s, async: %s) (%s): %s"):format(index, fromVer, toVer, tostring(async), tostring(value), desc))
+    do
+        -- Test the async mode by calling it on the same table with two different approaches for
+        -- yielding - always and never. They should both produce the same results, but never yielding
+        -- should only take a single call to the handler, whereas always yielding will require calling
+        -- it one more time than the number of times it yields.
+
+        local t = { "test", [false] = {}, a = 1, b = 2, { c = { 3, d = 4 } } }
+        local extra = "extra"
+        local expectedYieldChecks = 22
+
+        local callCountNever, callCountAlways = 0, 0
+        local function yieldNever()
+            callCountNever = callCountNever + 1
+            return false
+        end
+        local function yieldAlways()
+            callCountAlways = callCountAlways + 1
+            return true
+        end
+
+        local serialized
+        do
+            callCountNever, callCountAlways = 0, 0
+            local co_handlerNever = LibSerialize:SerializeAsyncEx({ yieldCheck = yieldNever }, t, extra)
+            local completedNever, serializedNever
+            local loopCountNever = 0
+            repeat
+                loopCountNever = loopCountNever + 1
+                completedNever, serializedNever = co_handlerNever()
+            until completedNever
+
+            local co_handlerAlways = LibSerialize:SerializeAsyncEx({ yieldCheck = yieldAlways }, t, extra)
+            local completedAlways, serializedAlways
+            local loopCountAlways = 0
+            repeat
+                loopCountAlways = loopCountAlways + 1
+                completedAlways, serializedAlways = co_handlerAlways()
+            until completedAlways
+
+            assert(loopCountNever == 1)
+            assert(loopCountAlways == callCountAlways + 1)
+            assert(callCountAlways == callCountNever)
+            assert(serializedNever == serializedAlways)
+            assert(callCountAlways == expectedYieldChecks)
+
+            serialized = serializedAlways
+        end
+
+        local tab, str
+        do
+            callCountNever, callCountAlways = 0, 0
+            local co_handlerNever = LibSerialize:DeserializeAsync(serialized, { yieldCheck = yieldNever })
+            local completedNever, successNever, tabNever, strNever
+            local loopCountNever = 0
+            repeat
+                loopCountNever = loopCountNever + 1
+                completedNever, successNever, tabNever, strNever = co_handlerNever()
+            until completedNever
+
+            local co_handlerAlways = LibSerialize:DeserializeAsync(serialized, { yieldCheck = yieldAlways })
+            local completedAlways, successAlways, tabAlways, strAlways
+            local loopCountAlways = 0
+            repeat
+                loopCountAlways = loopCountAlways + 1
+                completedAlways, successAlways, tabAlways, strAlways = co_handlerAlways()
+            until completedAlways
+
+            assert(successNever)
+            assert(successAlways)
+            assert(tCompare(tabNever, tabAlways))
+            assert(strNever == strAlways)
+            assert(loopCountNever == 1)
+            assert(loopCountAlways == callCountAlways + 1)
+            assert(callCountAlways == callCountNever)
+            assert(callCountAlways == expectedYieldChecks)
+
+            tab = tabAlways
+            str = strAlways
+        end
+
+        assert(tCompare(t, tab))
+        assert(str == extra)
     end
 
-    local function testfilter(t, k, v)
-        return k ~= "banned" and v ~= "banned"
+
+    --[[---------------------------------------------------------------------------
+        Misc test cases
+    --]]---------------------------------------------------------------------------
+
+    do
+        -- Verify that encoding nils are handled properly. They should be properly encoded
+        -- when serialized and returned when deserialized. The latter is only detectable
+        -- via varargs, as other tricks like capturing the returns in a table will strip
+        -- the trailing nils.
+
+        local function validate(async, ...)
+            local args = {...}
+            if async then
+                -- completed = true, success = true, then four nils
+                assert(select("#", ...) == 6)
+                assert(#args == 2)
+                assert(args[1] == true)
+                assert(args[2] == true)
+            else
+                -- success = true, then four nils
+                assert(select("#", ...) == 5)
+                assert(#args == 1)
+                assert(args[1] == true)
+            end
+        end
+
+        local serialized = LibSerialize:Serialize(nil, nil, nil, nil)
+        validate(false, LibSerialize:Deserialize(serialized))
+
+        local co_handler = LibSerialize:DeserializeAsync(serialized)
+        validate(true, co_handler())
+
+        co_handler = LibSerialize:SerializeAsync(nil, nil, nil, nil)
+        local completed, serializedAsync = co_handler()
+        assert(completed)
+        assert(serialized == serializedAsync)
     end
 
-    local function check(index, fromVer, from, toVer, to, value, bytelen, cmp, async)
-        local completed, success, serialized, deserialized
 
-        if async then
-            local co_handler = from:SerializeAsyncEx({ errorOnUnserializableType = false, filter = testfilter, yieldCheck = function() return true end }, value)
+    --[[---------------------------------------------------------------------------
+        Failure test cases
+    --]]---------------------------------------------------------------------------
+
+    do
+        local failCases = {
+            { print },
+            { [print] = true },
+            { [true] = print },
+            print,
+        }
+
+        local function doAsyncSerialize(value)
+            local co_handler = LibSerialize:SerializeAsync({ yieldCheck = function() return true end }, value)
             repeat
                 completed, serialized = co_handler()
             until completed
-        else
-            serialized = from:SerializeEx({ errorOnUnserializableType = false, filter = testfilter }, value)
         end
 
-        if #serialized ~= bytelen then
-            fail(index, fromVer, toVer, value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen), true)
-        end
+        for _, testCase in ipairs(failCases) do
+            local success = pcall(LibSerialize.Serialize, LibSerialize, testCase)
+            assert(success == false)
 
-        if async then
-            local co_handler = to:DeserializeAsync(serialized, { yieldCheck = function() return true end })
-            repeat
-                completed, success, deserialized = co_handler()
-            until completed
-        else
-            success, deserialized = to:Deserialize(serialized)
-        end
-
-        if not success then
-            fail(index, fromVer, toVer, value, ("Deserialization failed: %s"):format(deserialized), true)
-        end
-
-        -- Tests involving NaNs will be compared in string form.
-        if type(value) == "number" and isnan(value) then
-            value = tostring(value)
-            deserialized = tostring(deserialized)
-        end
-
-        local typ = type(value)
-        if typ == "table" and not tCompare(cmp or value, deserialized) then
-            fail(index, fromVer, toVer, value, "Non-matching deserialization result")
-        elseif typ ~= "table" and value ~= deserialized then
-            fail(index, fromVer, toVer, value, ("Non-matching deserialization result: %s"):format(tostring(deserialized)))
+            local success = pcall(doAsyncSerialize, testCase)
+            assert(success == false)
         end
     end
 
-    local function checkLatest(index, value, bytelen, cmp)
-        check(index, "latest", LibSerialize, "latest", LibSerialize, value, bytelen, cmp)
-        check(index, "latest", LibSerialize, "latest", LibSerialize, value, bytelen, cmp, true)
-    end
 
-    -- Format: each test case is { value, bytelen, cmp, earliest }. The value will be serialized
-    -- and then deserialized, checking for success and equality, and the length of
-    -- the serialized string will be compared against bytelen. If `cmp` is provided,
-    -- it will be used for comparison against the deserialized result instead of `value`.
-    -- Note that the length always contains one extra byte for the version number.
-    -- `earliest` is an index into the `versions` table below, indicating the earliest
-    -- version that supports the test case.
-    local testCases = {
-        { nil, 2 },
-        { true, 2 },
-        { false, 2 },
-        { 0, 2 },
-        { 1, 2 },
-        { 127, 2 },
-        { 128, 3 },
-        { 4095, 3 },
-        { 4096, 4 },
-        { 65535, 4 },
-        { 65536, 5 },
-        { 16777215, 5 },
-        { 16777216, 6 },
-        { 4294967295, 6 },
-        { 4294967296, 9 },
-        { 9007199254740992, 9 },
-        { 1.5, 6 },
-        { 27.32, 8 },
-        { 123.45678901235, 10 },
-        { 148921291233.23, 10 },
-        { -0, 2 },
-        { -1, 3 },
-        { -4095, 3 },
-        { -4096, 4 },
-        { -65535, 4 },
-        { -65536, 5 },
-        { -16777215, 5 },
-        { -16777216, 6 },
-        { -4294967295, 6 },
-        { -4294967296, 9 },
-        { -9007199254740992, 9 },
-        { -1.5, 6 },
-        { -123.45678901235, 10 },
-        { -148921291233.23, 10 },
-        { 0/0, 10, nil, 3 },  -- -1.#IND or -nan(ind)
-        { 1/0, 10, nil, 3 },  -- 1.#INF or inf
-        { -1/0, 10, nil, 3 }, -- -1.#INF or -inf
-        { "", 2 },
-        { "a", 3 },
-        { "abcdefghijklmno", 17 },
-        { "abcdefghijklmnop", 19 },
-        { ("1234567890"):rep(30), 304 },
-        { {}, 2 },
-        { { 1 }, 3 },
-        { { 1, 2, 3, 4, 5 }, 7 },
-        { { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }, 17 },
-        { { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 }, 19 },
-        { { 1, 2, 3, 4, a = 1, b = 2, [true] = 3, d = 4 }, 17 },
-        { { 1, 2, 3, 4, 5, a = 1, b = 2, c = true, d = 4 }, 21 },
-        { { 1, 2, 3, 4, 5, a = 1, b = 2, c = 3, d = 4, e = false }, 24 },
-        { { a = 1, b = 2, c = 3 }, 11 },
-        { { "aa", "bb", "aa", "bb" }, 14 },
-        { { "aa1", "bb2", "aa3", "bb4" }, 18 },
-        { { "aa1", "bb2", "aa1", "bb2" }, 14 },
-        { { "aa1", "bb2", "bb2", "aa1" }, 14 },
-        { { "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmno" }, 24 },
-        { { "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmnop" }, 40 },
-        { { 1, 2, 3, print, print, 6 }, 7, { 1, 2, 3, nil, nil, 6 } },
-        { { 1, 2, 3, print, 5, 6 }, 8, { 1, 2, 3, nil, 5, 6 } },
-        { { a = print, b = 1, c = print }, 5, { b = 1 } },
-        { { a = print, [print] = "a" }, 2, {} },
-        { { "banned", 1, 2, 3, banned = 4, test = "banned", a = 1 }, 9, { nil, 1, 2, 3, a = 1 } },
-        { { 1, 2, [math.huge] = "f", [3] = 3 }, 16, nil, 3 },
-        { { 1, 2, [-math.huge] = "f", [3] = 3 }, 16, nil, 3 },
-    }
+    --[[---------------------------------------------------------------------------
+        Test coverage of supported serialization types
+    --]]---------------------------------------------------------------------------
 
     do
-        local t = { a = 1, b = 2 }
-        table.insert(testCases, { { t, t, t }, 13 })
-        table.insert(testCases, { { { a = 1, b = 2 }, { a = 1, b = 2 }, { a = 1, b = 2 } }, 23 })
-    end
+        local function fail(index, fromVer, toVer, value, desc, async)
+            assert(false, ("Test #%d failed (serialization ver: %s, deserialization ver: %s, async: %s) (%s): %s"):format(index, fromVer, toVer, tostring(async), tostring(value), desc))
+        end
 
-    for i, testCase in ipairs(testCases) do
-        checkLatest(i, unpack(testCase))
-    end
+        local function testfilter(t, k, v)
+            return k ~= "banned" and v ~= "banned"
+        end
 
-    if require then
-        local versions = {
-            { "v1.0.0", require("archive.LibSerialize-v1-0-0") },
-            { "v1.1.0", require("archive.LibSerialize-v1-1-0") },
-            -- v1.1.1 skipped due to bug with serialization version causing known failures.
-            { "v1.1.2", require("archive.LibSerialize-v1-1-2") },
-            { "v1.1.3", require("archive.LibSerialize-v1-1-3") },
-            { "latest", LibSerialize },
+        local function check(index, fromVer, from, toVer, to, value, bytelen, cmp, async)
+            local completed, success, serialized, deserialized
+
+            if async then
+                local co_handler = from:SerializeAsyncEx({ errorOnUnserializableType = false, filter = testfilter, yieldCheck = function() return true end }, value)
+                repeat
+                    completed, serialized = co_handler()
+                until completed
+            else
+                serialized = from:SerializeEx({ errorOnUnserializableType = false, filter = testfilter }, value)
+            end
+
+            if #serialized ~= bytelen then
+                fail(index, fromVer, toVer, value, ("Unexpected serialized length (%d, expected %d)"):format(#serialized, bytelen), true)
+            end
+
+            if async then
+                local co_handler = to:DeserializeAsync(serialized, { yieldCheck = function() return true end })
+                repeat
+                    completed, success, deserialized = co_handler()
+                until completed
+            else
+                success, deserialized = to:Deserialize(serialized)
+            end
+
+            if not success then
+                fail(index, fromVer, toVer, value, ("Deserialization failed: %s"):format(deserialized), true)
+            end
+
+            -- Tests involving NaNs will be compared in string form.
+            if type(value) == "number" and isnan(value) then
+                value = tostring(value)
+                deserialized = tostring(deserialized)
+            end
+
+            local typ = type(value)
+            if typ == "table" and not tCompare(cmp or value, deserialized) then
+                fail(index, fromVer, toVer, value, "Non-matching deserialization result")
+            elseif typ ~= "table" and value ~= deserialized then
+                fail(index, fromVer, toVer, value, ("Non-matching deserialization result: %s"):format(tostring(deserialized)))
+            end
+        end
+
+        local function checkLatest(index, value, bytelen, cmp)
+            check(index, "latest", LibSerialize, "latest", LibSerialize, value, bytelen, cmp)
+            check(index, "latest", LibSerialize, "latest", LibSerialize, value, bytelen, cmp, true)
+        end
+
+        -- Format: each test case is { value, bytelen, cmp, earliest }. The value will be serialized
+        -- and then deserialized, checking for success and equality, and the length of
+        -- the serialized string will be compared against bytelen. If `cmp` is provided,
+        -- it will be used for comparison against the deserialized result instead of `value`.
+        -- Note that the length always contains one extra byte for the version number.
+        -- `earliest` is an index into the `versions` table below, indicating the earliest
+        -- version that supports the test case.
+        local testCases = {
+            { nil, 2 },
+            { true, 2 },
+            { false, 2 },
+            { 0, 2 },
+            { 1, 2 },
+            { 127, 2 },
+            { 128, 3 },
+            { 4095, 3 },
+            { 4096, 4 },
+            { 65535, 4 },
+            { 65536, 5 },
+            { 16777215, 5 },
+            { 16777216, 6 },
+            { 4294967295, 6 },
+            { 4294967296, 9 },
+            { 9007199254740992, 9 },
+            { 1.5, 6 },
+            { 27.32, 8 },
+            { 123.45678901235, 10 },
+            { 148921291233.23, 10 },
+            { -0, 2 },
+            { -1, 3 },
+            { -4095, 3 },
+            { -4096, 4 },
+            { -65535, 4 },
+            { -65536, 5 },
+            { -16777215, 5 },
+            { -16777216, 6 },
+            { -4294967295, 6 },
+            { -4294967296, 9 },
+            { -9007199254740992, 9 },
+            { -1.5, 6 },
+            { -123.45678901235, 10 },
+            { -148921291233.23, 10 },
+            { 0/0, 10, nil, 3 },  -- -1.#IND or -nan(ind)
+            { 1/0, 10, nil, 3 },  -- 1.#INF or inf
+            { -1/0, 10, nil, 3 }, -- -1.#INF or -inf
+            { "", 2 },
+            { "a", 3 },
+            { "abcdefghijklmno", 17 },
+            { "abcdefghijklmnop", 19 },
+            { ("1234567890"):rep(30), 304 },
+            { {}, 2 },
+            { { 1 }, 3 },
+            { { 1, 2, 3, 4, 5 }, 7 },
+            { { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }, 17 },
+            { { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 }, 19 },
+            { { 1, 2, 3, 4, a = 1, b = 2, [true] = 3, d = 4 }, 17 },
+            { { 1, 2, 3, 4, 5, a = 1, b = 2, c = true, d = 4 }, 21 },
+            { { 1, 2, 3, 4, 5, a = 1, b = 2, c = 3, d = 4, e = false }, 24 },
+            { { a = 1, b = 2, c = 3 }, 11 },
+            { { "aa", "bb", "aa", "bb" }, 14 },
+            { { "aa1", "bb2", "aa3", "bb4" }, 18 },
+            { { "aa1", "bb2", "aa1", "bb2" }, 14 },
+            { { "aa1", "bb2", "bb2", "aa1" }, 14 },
+            { { "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmno" }, 24 },
+            { { "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmno", "abcdefghijklmnop" }, 40 },
+            { { 1, 2, 3, print, print, 6 }, 7, { 1, 2, 3, nil, nil, 6 } },
+            { { 1, 2, 3, print, 5, 6 }, 8, { 1, 2, 3, nil, 5, 6 } },
+            { { a = print, b = 1, c = print }, 5, { b = 1 } },
+            { { a = print, [print] = "a" }, 2, {} },
+            { { "banned", 1, 2, 3, banned = 4, test = "banned", a = 1 }, 9, { nil, 1, 2, 3, a = 1 } },
+            { { 1, 2, [math.huge] = "f", [3] = 3 }, 16, nil, 3 },
+            { { 1, 2, [-math.huge] = "f", [3] = 3 }, 16, nil, 3 },
         }
 
-        for i = 1, #versions do
-            for j = i + 1, #versions do
-                local fromVer, from = unpack(versions[i])
-                local toVer, to = unpack(versions[j])
+        do
+            local t = { a = 1, b = 2 }
+            table.insert(testCases, { { t, t, t }, 13 })
+            table.insert(testCases, { { { a = 1, b = 2 }, { a = 1, b = 2 }, { a = 1, b = 2 } }, 23 })
+        end
 
-                for k, testCase in ipairs(testCases) do
-                    local value, bytelen, cmp, earliest = unpack(testCase)
-                    if not earliest or (i >= earliest and j >= earliest) then
-                        check(k, fromVer, from, toVer, to, value, bytelen, cmp)
-                        check(k, toVer, to, fromVer, from, value, bytelen, cmp)
+        for i, testCase in ipairs(testCases) do
+            checkLatest(i, unpack(testCase))
+        end
+
+        if require then
+            local versions = {
+                { "v1.0.0", require("archive.LibSerialize-v1-0-0") },
+                { "v1.1.0", require("archive.LibSerialize-v1-1-0") },
+                -- v1.1.1 skipped due to bug with serialization version causing known failures.
+                { "v1.1.2", require("archive.LibSerialize-v1-1-2") },
+                { "v1.1.3", require("archive.LibSerialize-v1-1-3") },
+                { "latest", LibSerialize },
+            }
+
+            for i = 1, #versions do
+                for j = i + 1, #versions do
+                    local fromVer, from = unpack(versions[i])
+                    local toVer, to = unpack(versions[j])
+
+                    for k, testCase in ipairs(testCases) do
+                        local value, bytelen, cmp, earliest = unpack(testCase)
+                        if not earliest or (i >= earliest and j >= earliest) then
+                            check(k, fromVer, from, toVer, to, value, bytelen, cmp)
+                            check(k, toVer, to, fromVer, from, value, bytelen, cmp)
+                        end
                     end
                 end
             end
         end
-    end
-
-    -- Since all the above tests assume serialization success, try some failures now.
-    local failCases = {
-        { print },
-        { [print] = true },
-        { [true] = print },
-        print,
-    }
-
-    local function doAsyncSerialize(value)
-        local co_handler = LibSerialize:SerializeAsync({ yieldCheck = function() return true end }, value)
-        repeat
-            completed, serialized = co_handler()
-        until completed
-    end
-
-    for _, testCase in ipairs(failCases) do
-        local success = pcall(LibSerialize.Serialize, LibSerialize, testCase)
-        assert(success == false)
-
-        local success = pcall(doAsyncSerialize, testCase)
-        assert(success == false)
     end
 
 
