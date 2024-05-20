@@ -462,8 +462,8 @@ the following possible keys:
         completed, serialized = co_handler()
     until completed
 
-    local tab, str
-    co_handler = LibSerialize:DeserializeAsync(serialized)
+    local completed, success, tab, str
+    local co_handler = LibSerialize:DeserializeAsync(serialized)
     repeat
         completed, success, tab, str = co_handler()
     until completed
@@ -590,30 +590,31 @@ local DESERIALIZATION_VERSION = 2
 --]]---------------------------------------------------------------------------
 
 local assert = assert
+local coroutine_create = coroutine.create
+local coroutine_resume = coroutine.resume
+local coroutine_status = coroutine.status
+local coroutine_yield = coroutine.yield
 local error = error
+local getmetatable = getmetatable
+local ipairs = ipairs
+local math_floor = math.floor
+local math_huge = math.huge
+local math_max = math.max
+local math_modf = math.modf
+local pairs = pairs
 local pcall = pcall
 local print = print
-local getmetatable = getmetatable
-local pairs = pairs
-local ipairs = ipairs
 local select = select
-local type = type
-local tostring = tostring
-local tonumber = tonumber
-local max = math.max
-local floor = math.floor
-local math_modf = math.modf
-local math_huge = math.huge
+local setmetatable = setmetatable
 local string_byte = string.byte
 local string_char = string.char
 local string_sub = string.sub
 local table_concat = table.concat
 local table_insert = table.insert
 local table_sort = table.sort
-local coroutine_create = coroutine.create
-local coroutine_status = coroutine.status
-local coroutine_resume = coroutine.resume
-local coroutine_yield = coroutine.yield
+local tonumber = tonumber
+local tostring = tostring
+local type = type
 
 -- Compatibility shim to allow the library to work on Lua 5.4
 local unpack = unpack or table.unpack
@@ -634,6 +635,20 @@ local frexp = math.frexp or function(num)
 end
 local ldexp = math.ldexp or function(m, e)
     return m * 2 ^ e
+end
+
+-- If in an environment that supports `require` and `_ENV` (note: WoW does not),
+-- then block reading/writing of globals. All needed globals should have been
+-- converted to upvalues above.
+if require and _ENV then
+    _ENV = setmetatable({}, {
+        __newindex = function(t, k, v)
+            assert(false, "Attempt to write to global variable: " .. k)
+        end,
+        __index = function(t, k)
+            assert(false, "Attempt to read global variable: " .. k)
+        end
+    })
 end
 
 
@@ -932,14 +947,14 @@ local function FloatToString(n)
         return string_char(sign, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
     else
         expo = expo + 0x3FE
-        mant = floor((mant * 2.0 - 1.0) * ldexp(0.5, 53))
-        return string_char(sign + floor(expo / 0x10),
-                           (expo % 0x10) * 0x10 + floor(mant / 281474976710656),
-                           floor(mant / 1099511627776) % 256,
-                           floor(mant / 4294967296) % 256,
-                           floor(mant / 16777216) % 256,
-                           floor(mant / 65536) % 256,
-                           floor(mant / 256) % 256,
+        mant = math_floor((mant * 2.0 - 1.0) * ldexp(0.5, 53))
+        return string_char(sign + math_floor(expo / 0x10),
+                           (expo % 0x10) * 0x10 + math_floor(mant / 281474976710656),
+                           math_floor(mant / 1099511627776) % 256,
+                           math_floor(mant / 4294967296) % 256,
+                           math_floor(mant / 16777216) % 256,
+                           math_floor(mant / 65536) % 256,
+                           math_floor(mant / 256) % 256,
                            mant % 256)
     end
 end
@@ -947,7 +962,7 @@ end
 local function StringToFloat(str)
     local b1, b2, b3, b4, b5, b6, b7, b8 = string_byte(str, 1, 8)
     local sign = b1 > 0x7F
-    local expo = (b1 % 0x80) * 0x10 + floor(b2 / 0x10)
+    local expo = (b1 % 0x80) * 0x10 + math_floor(b2 / 0x10)
     local mant = ((((((b2 % 0x10) * 256 + b3) * 256 + b4) * 256 + b5) * 256 + b6) * 256 + b7) * 256 + b8
     if sign then
         sign = -1
@@ -973,24 +988,24 @@ local function IntToString(n, required)
     if required == 1 then
         return string_char(n)
     elseif required == 2 then
-        return string_char(floor(n / 256),
+        return string_char(math_floor(n / 256),
                            n % 256)
     elseif required == 3 then
-        return string_char(floor(n / 65536),
-                           floor(n / 256) % 256,
+        return string_char(math_floor(n / 65536),
+                           math_floor(n / 256) % 256,
                            n % 256)
     elseif required == 4 then
-        return string_char(floor(n / 16777216),
-                           floor(n / 65536) % 256,
-                           floor(n / 256) % 256,
+        return string_char(math_floor(n / 16777216),
+                           math_floor(n / 65536) % 256,
+                           math_floor(n / 256) % 256,
                            n % 256)
     elseif required == 7 then
-        return string_char(floor(n / 281474976710656) % 256,
-                           floor(n / 1099511627776) % 256,
-                           floor(n / 4294967296) % 256,
-                           floor(n / 16777216) % 256,
-                           floor(n / 65536) % 256,
-                           floor(n / 256) % 256,
+        return string_char(math_floor(n / 281474976710656) % 256,
+                           math_floor(n / 1099511627776) % 256,
+                           math_floor(n / 4294967296) % 256,
+                           math_floor(n / 16777216) % 256,
+                           math_floor(n / 65536) % 256,
+                           math_floor(n / 256) % 256,
                            n % 256)
     end
 
@@ -1298,7 +1313,7 @@ LibSerializeInt._EmbeddedReaderTable = {
     [LibSerializeInt._EmbeddedIndex.TABLE] =  function(self, c) return self:_ReadTable(c) end,
     [LibSerializeInt._EmbeddedIndex.ARRAY] =  function(self, c) return self:_ReadArray(c) end,
     -- For MIXED, the 4-bit count contains two 2-bit counts that are one less than the true count.
-    [LibSerializeInt._EmbeddedIndex.MIXED] =  function(self, c) return self:_ReadMixed((c % 4) + 1, floor(c / 4) + 1) end,
+    [LibSerializeInt._EmbeddedIndex.MIXED] =  function(self, c) return self:_ReadMixed((c % 4) + 1, math_floor(c / 4) + 1) end,
 }
 
 local readerIndexShift = 8
@@ -1542,7 +1557,7 @@ LibSerializeInt._WriterTable = {
                     num = -num
                 end
                 num = num * 16 + sign + 4
-                local upper, lower = floor(num / 256), num % 256
+                local upper, lower = math_floor(num / 256), num % 256
                 self:_WriteByte(lower)
                 self:_WriteByte(upper)
             end
@@ -1691,7 +1706,7 @@ LibSerializeInt._WriterTable = {
                 else
                     -- Use the max required bytes for the two counts.
                     -- DebugPrint("Serializing mixed array-table:", arrayCount, mapCount)
-                    local required = max(GetRequiredBytes(mapCount), GetRequiredBytes(arrayCount))
+                    local required = math_max(GetRequiredBytes(mapCount), GetRequiredBytes(arrayCount))
                     self:_WriteByte(readerIndexShift * mixedIndices[required])
                     self:_WriteInt(arrayCount, required)
                     self:_WriteInt(mapCount, required)

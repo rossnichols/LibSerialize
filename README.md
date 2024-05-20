@@ -426,8 +426,8 @@ the following possible keys:
         completed, serialized = co_handler()
     until completed
 
-    local tab, str
-    co_handler = LibSerialize:DeserializeAsync(serialized)
+    local completed, success, tab, str
+    local co_handler = LibSerialize:DeserializeAsync(serialized)
     repeat
         completed, success, tab, str = co_handler()
     until completed

@@ -1,7 +1,36 @@
 local LibSerialize = LibStub and LibStub:GetLibrary("LibSerialize") or require("LibSerialize")
 
--- Compatibility with Lua 5.4
-local unpack = unpack or table.unpack
+local assert = assert
+local coroutine = coroutine
+local ipairs = ipairs
+local math = math
+local next = next
+local pairs = pairs
+local pcall = pcall
+local print = print
+local require = require
+local select = select
+local setmetatable = setmetatable
+local string = string
+local table = table
+local tonumber = tonumber
+local tostring = tostring
+local type = type
+local unpack = unpack or table.unpack -- Compatibility with Lua 5.4
+
+-- If in an environment that supports `require` and `_ENV` (note: WoW does not),
+-- then block reading/writing of globals. All needed globals should have been
+-- converted to upvalues above.
+if require and _ENV then
+    _ENV = setmetatable({}, {
+        __newindex = function(t, k, v)
+            assert(false, "Attempt to write to global variable: " .. k)
+        end,
+        __index = function(t, k)
+            assert(false, "Attempt to read global variable: " .. k)
+        end
+    })
+end
 
 function LibSerialize:RunTests()
     --[[---------------------------------------------------------------------------
@@ -71,8 +100,8 @@ function LibSerialize:RunTests()
             completed, serialized = co_handler()
         until completed
 
-        local tab, str
-        co_handler = LibSerialize:DeserializeAsync(serialized)
+        local completed, success, tab, str
+        local co_handler = LibSerialize:DeserializeAsync(serialized)
         repeat
             completed, success, tab, str = co_handler()
         until completed
