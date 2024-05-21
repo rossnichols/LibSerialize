@@ -369,6 +369,47 @@ function LibSerialize:RunTests()
 
         assert(tCompare(t, tab))
         assert(str == extra)
+
+        -- Validate that async calls can properly handle multiple simultaneous operations.
+        local t2 = { x = "y", "test", [false] = { 1, 2, 3, a = "b" } }
+
+        local serialized1, serialized2
+        do
+            local co_handler1 = LibSerialize:SerializeAsyncEx({ yieldCheck = yieldAlways }, t)
+            local co_handler2 = LibSerialize:SerializeAsyncEx({ yieldCheck = yieldAlways }, t2)
+
+            local completed1, completed2
+            repeat
+                if not completed1 then
+                    completed1, serialized1 = co_handler1()
+                end
+                if not completed2 then
+                    completed2, serialized2 = co_handler2()
+                end
+            until completed1 and completed2
+        end
+
+        local tab1, tab2
+        do
+            local co_handler1 = LibSerialize:DeserializeAsync(serialized1, { yieldCheck = yieldAlways })
+            local co_handler2 = LibSerialize:DeserializeAsync(serialized2, { yieldCheck = yieldAlways })
+
+            local completed1, completed2, success1, success2
+            repeat
+                if not completed1 then
+                    completed1, success1, tab1 = co_handler1()
+                end
+                if not completed2 then
+                    completed2, success2, tab2 = co_handler2()
+                end
+            until completed1 and completed2
+
+            assert(success1)
+            assert(success2)
+        end
+
+        assert(tCompare(t, tab1))
+        assert(tCompare(t2, tab2))
     end
 
 
