@@ -1,6 +1,7 @@
 ignore:
-  - README.md
   - LICENSE
-  - tests.lua
   - LibSerialize.toc
+  - README.md
+  - buildreadme.lua
+  - tests.lua
   - archive/*
