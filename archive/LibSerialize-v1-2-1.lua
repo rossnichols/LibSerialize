@@ -601,7 +601,6 @@ local math_floor = math.floor
 local math_huge = math.huge
 local math_max = math.max
 local math_modf = math.modf
-local math_type = math.type -- nil prior to Lua 5.3 (e.g. WoW's 5.1)
 local pairs = pairs
 local pcall = pcall
 local print = print
@@ -770,46 +769,33 @@ end
 local function Noop()
 end
 
--- Ordering of key types for stable map serialization. We arbitrarily put
--- strings first, then numbers, then booleans, and finally all reference types
--- (tables, functions, threads, userdata) which share the last rank.
-local stableKeyTypeRank = {
-    ["string"] = 1,
-    ["number"] = 2,
-    ["boolean"] = 3,
-}
-
 -- Sort compare function which is used to sort table keys to ensure that the
--- serialization of maps is stable. Keys are ordered first by type, and then
--- by value where a meaningful value ordering exists.
---
--- Reference-type keys (tables, functions, etc.) have no value ordering, so
--- they're ordered by their string representation purely to provide a total,
--- crash-free ordering within a single serialization. As a result, maps keyed
--- by reference types are not guaranteed to serialize identically across
--- separate runs even with the `stable` option enabled.
+-- serialization of maps is stable. We arbitrarily put strings first, then
+-- numbers, and finally booleans.
 local function StableKeySort(a, b)
     local aType = type(a)
     local bType = type(b)
-    local aRank = stableKeyTypeRank[aType] or 4
-    local bRank = stableKeyTypeRank[bType] or 4
-
-    if aRank ~= bRank then
-        return aRank < bRank
-    end
-
-    -- Same ranking; compare within the type.
-    if aType == "string" or aType == "number" then
+    -- Put strings first
+    if aType == "string" and bType == "string" then
         return a < b
-    elseif aType == "boolean" then
+    elseif aType == "string" then
+        return true
+    elseif bType == "string" then
+        return false
+    end
+    -- Put numbers next
+    if aType == "number" and bType == "number" then
+        return a < b
+    elseif aType == "number" then
+        return true
+    elseif bType == "number" then
+        return false
+    end
+    -- Put booleans last
+    if aType == "boolean" and bType == "boolean" then
         return (a and 1 or 0) < (b and 1 or 0)
-    elseif aType ~= bType then
-        -- Distinct reference types (e.g. table vs function); order by type name.
-        return aType < bType
     else
-        -- Same reference type; order by string representation. Distinct objects
-        -- have distinct representations, so this is a strict ordering.
-        return tostring(a) < tostring(b)
+        error(("Unhandled sort type(s): %s, %s"):format(aType, bType))
     end
 end
 
@@ -957,24 +943,11 @@ local function FloatToString(n)
         else -- -inf
             return string_char(0xFF, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
         end
-    elseif mant == 0.0 and expo == 0 then -- zero
+    elseif (mant == 0.0 and expo == 0) or expo < -0x3FE then -- zero
         return string_char(sign, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
     else
-        local fraction = mant
         expo = expo + 0x3FE
-        if expo <= 0 then
-            -- Subnormal (denormal) value, or an underflow to true zero. On read
-            -- these are reconstructed as (mant / 2^52) * 2^-1022, so derive the
-            -- 52-bit significand directly from the frexp fraction rather than
-            -- flushing the value to zero.
-            mant = math_floor(ldexp(fraction, expo + 52) + 0.5)
-            if mant == 0 then
-                return string_char(sign, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
-            end
-            expo = 0
-        else
-            mant = math_floor((fraction * 2.0 - 1.0) * ldexp(0.5, 53))
-        end
+        mant = math_floor((mant * 2.0 - 1.0) * ldexp(0.5, 53))
         return string_char(sign + math_floor(expo / 0x10),
                            (expo % 0x10) * 0x10 + math_floor(mant / 281474976710656),
                            math_floor(mant / 1099511627776) % 256,
@@ -1005,9 +978,6 @@ local function StringToFloat(str)
         else
             n = 0.0/0.0
         end
-    elseif expo == 0 then
-        -- Subnormal (denormal): no implicit leading one, fixed exponent.
-        n = sign * ldexp(mant / 4503599627370496.0, -0x3FE)
     else
         n = sign * ldexp(1.0 + mant / 4503599627370496.0, expo - 0x3FF)
     end
@@ -1223,10 +1193,8 @@ function LibSerializeInt:_ReadObject()
     local value = self:_ReadByte()
 
     if value % 2 == 1 then
-        -- Number embedded in the top 7 bits. math_floor keeps the integer
-        -- subtype on Lua 5.3+ (the division is exact); it's a value-preserving
-        -- no-op on 5.1 where all numbers are doubles.
-        local num = math_floor((value - 1) / 2)
+        -- Number embedded in the top 7 bits.
+        local num = (value - 1) / 2
         -- DebugPrint("Found embedded number (1byte):", value, num)
         return num
     end
@@ -1247,9 +1215,9 @@ function LibSerializeInt:_ReadObject()
         local packed = self:_ReadByte() * 256 + value
         local num
         if value % 16 == 12 then
-            num = math_floor(-(packed - 12) / 16)
+            num = -(packed - 12) / 16
         else
-            num = math_floor((packed - 4) / 16)
+            num = (packed - 4) / 16
         end
         -- DebugPrint("Found embedded number (2bytes):", value, packed, num)
         return num
@@ -1361,7 +1329,7 @@ LibSerializeInt._ReaderIndex = {
     NUM_64_POS = 7,
     NUM_64_NEG = 8,
     NUM_FLOAT = 9,
-    NUM_FLOATSTR = 10,
+    NUM_FLOATSTR_POS = 10,
     NUM_FLOATSTR_NEG = 11,
 
     BOOL_T = 12,
@@ -1405,7 +1373,7 @@ LibSerializeInt._ReaderTable = {
     [LibSerializeInt._ReaderIndex.NUM_64_POS] = function(self) return self:_ReadInt(7) end,
     [LibSerializeInt._ReaderIndex.NUM_64_NEG] = function(self) return -self:_ReadInt(7) end,
     [LibSerializeInt._ReaderIndex.NUM_FLOAT]  = function(self) return StringToFloat(self._readBytes(self._reader, 8)) end,
-    [LibSerializeInt._ReaderIndex.NUM_FLOATSTR]  = function(self) return tonumber(self._readBytes(self._reader, self:_ReadByte())) end,
+    [LibSerializeInt._ReaderIndex.NUM_FLOATSTR_POS]  = function(self) return tonumber(self._readBytes(self._reader, self:_ReadByte())) end,
     [LibSerializeInt._ReaderIndex.NUM_FLOATSTR_NEG]  = function(self) return -tonumber(self._readBytes(self._reader, self:_ReadByte())) end,
 
     -- Booleans
@@ -1552,48 +1520,7 @@ LibSerializeInt._WriterTable = {
         self:_WriteByte(readerIndexShift * self._ReaderIndex.NIL)
     end,
     ["number"] = function(self, num)
-        -- Preserve negative zero, which the integer/embedded paths would
-        -- otherwise collapse to +0. There's no compact type code for it, so
-        -- encode it as a fixed "-0.0" via NUM_FLOATSTR: 7 bytes total, decoded
-        -- by tonumber back to -0.0 on Lua 5.1 through 5.4, and readable by older
-        -- deserializers. A literal "-0.0" is used rather than tostring(num),
-        -- whose output for negative zero varies by runtime ("-0" vs "-0.0") and
-        -- would not round-trip across runtimes.
-        if num == 0 and 1 / num < 0 then
-            local negativeZero = "-0.0"
-            self:_WriteByte(readerIndexShift * self._ReaderIndex.NUM_FLOATSTR)
-            self:_WriteByte(#negativeZero, 1)
-            self._writeString(self._writer, negativeZero)
-            return
-        end
-
-        -- Exact encoding for large integer-subtype values (Lua 5.3+). Integers
-        -- with magnitude > 2^53 can't be represented exactly by the double-based
-        -- numeric paths, so serialize them as their decimal string, which
-        -- tonumber decodes back to the exact integer. This reuses the existing
-        -- NUM_FLOATSTR type (with the full signed string under the "positive"
-        -- code, so math.mininteger needs no problematic negation), meaning even
-        -- older deserializers can read the result.
-        if math_type and math_type(num) == "integer"
-           and (num > 9007199254740992 or num < -9007199254740992) then
-            local asString = tostring(num)
-            self:_WriteByte(readerIndexShift * self._ReaderIndex.NUM_FLOATSTR)
-            self:_WriteByte(#asString, 1)
-            self._writeString(self._writer, asString)
-            return
-        end
-
-        -- Whole numbers whose magnitude is too large for the 56-bit integer
-        -- encoding (|num| >= 2^56) are stored as doubles instead, to avoid
-        -- silently truncating them. Forcing a float subtype here also avoids
-        -- integer negation overflow further below (e.g. -math.mininteger).
-        local useFloat = IsFloatingPoint(num)
-        if not useFloat and (num >= 72057594037927936 or num <= -72057594037927936) then
-            useFloat = true
-            num = num + 0.0
-        end
-
-        if useFloat then
+        if IsFloatingPoint(num) then
             -- DebugPrint("Serializing float:", num)
             -- Normally a float takes 8 bytes. See if it's cheaper to encode as a string.
             -- If we encode as a string, though, we'll need a byte for its length.
@@ -1609,7 +1536,7 @@ LibSerializeInt._WriterTable = {
             end
             local asString = tostring(numAbs)
             if #asString < 7 and tonumber(asString) == numAbs and IsFinite(numAbs) then
-                self:_WriteByte(sign + readerIndexShift * self._ReaderIndex.NUM_FLOATSTR)
+                self:_WriteByte(sign + readerIndexShift * self._ReaderIndex.NUM_FLOATSTR_POS)
                 self:_WriteByte(#asString, 1)
                 self._writeString(self._writer, asString)
             else
@@ -1691,7 +1618,7 @@ LibSerializeInt._WriterTable = {
 
             local filter
             local mt = getmetatable(tab)
-            if mt and type(mt) == "table" and type(mt.__LibSerialize) == "table" then
+            if mt and type(mt) == "table" and mt.__LibSerialize then
                 filter = mt.__LibSerialize.filter
             end
 
@@ -1872,7 +1799,7 @@ LibSerializeInt._WriterTable = {
 local serializeTester = CreateSerializer(canSerializeFnOptions)
 
 function LibSerialize:IsSerializableType(...)
-    return serializeTester:_CanSerialize(...)
+    return serializeTester:_CanSerialize(canSerializeFnOptions, ...)
 end
 
 function LibSerialize:SerializeEx(opts, ...)
@@ -1881,6 +1808,8 @@ function LibSerialize:SerializeEx(opts, ...)
     if opts.async then
         local ser = CreateSerializer(opts, ...)
         local thread = coroutine_create(Serialize)
+        local inputSize = select("#", ...)
+        local input = {...}
 
         -- return coroutine handler
         return function()
