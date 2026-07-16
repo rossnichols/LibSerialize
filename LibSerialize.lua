@@ -568,7 +568,7 @@ The type byte uses the following formats to implement the above:
 [Writer protocol]: #writer-protocol
 END_README --]]
 
-local MAJOR, MINOR = "LibSerialize", 5
+local MAJOR, MINOR = "LibSerialize", 6
 local LibSerialize
 if LibStub then
     LibSerialize = LibStub:NewLibrary(MAJOR, MINOR)
