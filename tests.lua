@@ -1188,6 +1188,251 @@ function LibSerialize:RunTests()
     end
 
 
+    --[[---------------------------------------------------------------------------
+        Coverage: multi-byte counts and lengths (16-bit and 24-bit paths)
+    --]]---------------------------------------------------------------------------
+
+    -- ARRAY_16 and STR_16 are exercised elsewhere (the 1000-element streaming
+    -- tests and the 300-byte string). These cover the larger map counts and the
+    -- 24-bit count/length paths for arrays, strings, tables, and mixed tables.
+
+    do
+        local function roundtrip(v)
+            local ok, out = LibSerialize:Deserialize(LibSerialize:Serialize(v))
+            assert(ok, "large-structure serialization failed")
+            return out
+        end
+
+        -- Map with 300 string keys -> TABLE_16 (2-byte count)
+        local map16 = {}
+        for i = 1, 300 do map16["k" .. i] = i end
+        assert(tCompare(roundtrip(map16), map16), "300-key map (TABLE_16) round-trip")
+
+        -- Map with 70000 string keys -> TABLE_24 (3-byte count)
+        local map24 = {}
+        for i = 1, 70000 do map24["k" .. i] = i end
+        assert(tCompare(roundtrip(map24), map24), "70000-key map (TABLE_24) round-trip")
+
+        -- Array with 70000 elements -> ARRAY_24 (3-byte count)
+        local array24 = {}
+        for i = 1, 70000 do array24[i] = i end
+        assert(tCompare(roundtrip(array24), array24), "70000-element array (ARRAY_24) round-trip")
+
+        -- String of 70000 bytes -> STR_24 (3-byte length)
+        local string24 = ("ab"):rep(35000)
+        assert(roundtrip(string24) == string24, "70000-byte string (STR_24) round-trip")
+
+        -- Mixed table with 300 array + 300 map entries -> MIXED_16
+        local mixed16 = {}
+        for i = 1, 300 do mixed16[i] = i end
+        for i = 1, 300 do mixed16["m" .. i] = i end
+        assert(tCompare(roundtrip(mixed16), mixed16), "mixed table (MIXED_16) round-trip")
+
+        -- Mixed table with 70000 array entries + a few map entries -> MIXED_24
+        local mixed24 = {}
+        for i = 1, 70000 do mixed24[i] = i end
+        mixed24.a, mixed24.b, mixed24.c = 1, 2, 3
+        assert(tCompare(roundtrip(mixed24), mixed24), "mixed table (MIXED_24) round-trip")
+    end
+
+
+    --[[---------------------------------------------------------------------------
+        Coverage: multi-byte reference indices (STRINGREF_16 / TABLEREF_16)
+    --]]---------------------------------------------------------------------------
+
+    -- With more than 255 unique interned strings/tables, later references must
+    -- use a 2-byte index, exercising the 16-bit reference paths (the 8-bit paths
+    -- are covered by the existing interning tests).
+
+    do
+        -- 400 distinct >2-byte strings, each referenced twice.
+        local strings = {}
+        for i = 1, 400 do strings[i] = "unique-string-" .. i end
+        local strValue = {}
+        for i = 1, 400 do
+            strValue[#strValue + 1] = strings[i]
+            strValue[#strValue + 1] = strings[i]
+        end
+        local sok, sout = LibSerialize:Deserialize(LibSerialize:Serialize(strValue))
+        assert(sok, "string-ref-heavy value should deserialize")
+        for i = 1, 400 do
+            assert(sout[2 * i - 1] == strings[i] and sout[2 * i] == strings[i],
+                "STRINGREF_16 round-trip")
+        end
+
+        -- 400 distinct shared subtables, each referenced twice.
+        local subtables = {}
+        for i = 1, 400 do subtables[i] = { id = i } end
+        local tblValue = {}
+        for i = 1, 400 do
+            tblValue[#tblValue + 1] = subtables[i]
+            tblValue[#tblValue + 1] = subtables[i]
+        end
+        local tok, tout = LibSerialize:Deserialize(LibSerialize:Serialize(tblValue))
+        assert(tok, "table-ref-heavy value should deserialize")
+        for i = 1, 400 do
+            assert(tout[2 * i - 1].id == i, "TABLEREF_16 value round-trip")
+            assert(tout[2 * i - 1] == tout[2 * i], "TABLEREF_16 identity/dedup preserved")
+        end
+    end
+
+
+    --[[---------------------------------------------------------------------------
+        Coverage: malformed / adversarial input is handled gracefully
+    --]]---------------------------------------------------------------------------
+
+    -- The safe Deserialize API must never crash on bad input (it decodes
+    -- untrusted data, e.g. from addon comms); it should return false instead.
+
+    do
+        local valid = LibSerialize:Serialize({ 1, 2, 3, "hello", { a = 1 } })
+
+        -- Truncated input.
+        assert(LibSerialize:Deserialize(valid:sub(1, #valid - 1)) == false,
+            "truncated input should fail gracefully")
+
+        -- Empty input (no version byte).
+        assert(LibSerialize:Deserialize("") == false,
+            "empty input should fail gracefully")
+
+        -- Unknown (too-high) serialization version.
+        assert(LibSerialize:Deserialize(string.char(255) .. valid:sub(2)) == false,
+            "unknown version should fail gracefully")
+
+        -- Out-of-range string reference: STRINGREF_8 (type 26) with index 5 and
+        -- nothing interned. This is defined to decode to nil, not to error.
+        local badRef = string.char(1, 26 * 8, 5)
+        local okRef = LibSerialize:Deserialize(badRef)
+        assert(okRef == true, "out-of-range reference should decode gracefully (to nil)")
+
+        -- Deeply nested input: 200000 nested single-element arrays. Should be
+        -- caught as a stack overflow rather than crashing the process.
+        local embeddedArray1 = string.char(16 * 1 + 4 * 2 + 2)
+        local deep = string.char(1) .. string.rep(embeddedArray1, 200000) .. string.char(0)
+        assert(LibSerialize:Deserialize(deep) == false,
+            "deeply nested input should fail gracefully (stack overflow caught)")
+    end
+
+
+    --[[---------------------------------------------------------------------------
+        Coverage: DeserializeValue vs Deserialize error semantics
+    --]]---------------------------------------------------------------------------
+
+    do
+        local truncated = LibSerialize:Serialize({ 1, 2, 3 })
+        truncated = truncated:sub(1, #truncated - 1)
+
+        -- Deserialize catches errors and returns (false, message).
+        local ok, err = LibSerialize:Deserialize(truncated)
+        assert(ok == false, "Deserialize should catch errors and return false")
+        assert(type(err) == "string", "Deserialize should return an error message")
+
+        -- DeserializeValue does not catch; it raises (must be wrapped in pcall).
+        assert(pcall(function() return LibSerialize:DeserializeValue(truncated) end) == false,
+            "DeserializeValue should raise on malformed input")
+
+        -- DeserializeAsync always catches: it completes with success = false.
+        local handler = LibSerialize:DeserializeAsync(truncated)
+        local completed, success
+        repeat
+            completed, success = handler()
+        until completed
+        assert(success == false, "DeserializeAsync should complete with success = false")
+    end
+
+
+    --[[---------------------------------------------------------------------------
+        Coverage: IsSerializableType
+    --]]---------------------------------------------------------------------------
+
+    do
+        assert(LibSerialize:IsSerializableType() == true, "no arguments is serializable")
+        assert(LibSerialize:IsSerializableType(nil) == true, "nil is serializable")
+        assert(LibSerialize:IsSerializableType(true) == true, "boolean is serializable")
+        assert(LibSerialize:IsSerializableType(42) == true, "number is serializable")
+        assert(LibSerialize:IsSerializableType("s") == true, "string is serializable")
+        assert(LibSerialize:IsSerializableType({}) == true, "table is serializable")
+        assert(LibSerialize:IsSerializableType(1, "a", true) == true, "all-serializable varargs")
+
+        assert(LibSerialize:IsSerializableType(print) == false, "function is not serializable")
+        assert(LibSerialize:IsSerializableType(coroutine.create(function() end)) == false,
+            "thread is not serializable")
+        assert(LibSerialize:IsSerializableType(1, print) == false,
+            "any unserializable argument makes the result false")
+
+        -- Documented: a table argument is considered serializable even if it
+        -- contains unserializable keys or values (only the arg types are checked).
+        assert(LibSerialize:IsSerializableType({ [print] = print, a = print }) == true,
+            "a table is serializable regardless of its contents")
+    end
+
+
+    --[[---------------------------------------------------------------------------
+        Coverage: incomplete writer is ignored
+    --]]---------------------------------------------------------------------------
+
+    -- A writer object without WriteString does not satisfy the Writer protocol
+    -- and must be ignored, falling back to the default buffered-string result.
+
+    do
+        local incompleteWriter = { Flush = function() return "should-not-be-used" end }
+        local value = { 1, 2, 3, "test" }
+        local bytes = LibSerialize:SerializeEx({ writer = incompleteWriter }, value)
+        assert(type(bytes) == "string", "incomplete writer should fall back to a buffered string")
+        assert(bytes ~= "should-not-be-used", "incomplete writer's Flush should be ignored")
+        local ok, out = LibSerialize:Deserialize(bytes)
+        assert(ok and tCompare(out, value), "fallback result should round-trip")
+    end
+
+
+    --[[---------------------------------------------------------------------------
+        Coverage: Flush return values are passed through verbatim
+    --]]---------------------------------------------------------------------------
+
+    do
+        -- Multiple values (including a nil in the middle) are all returned.
+        local multiWriter = {
+            WriteString = function() end,
+            Flush = function() return "a", 2, nil, true end,
+        }
+        local r = PackTable(LibSerialize:SerializeEx({ writer = multiWriter }, { 1 }))
+        assert(r.n == 4, "expected all four Flush values to be returned")
+        assert(r[1] == "a" and r[2] == 2 and r[3] == nil and r[4] == true,
+            "Flush values should pass through verbatim")
+
+        -- A writer with no Flush returns nothing from SerializeEx.
+        local noFlushWriter = { WriteString = function() end }
+        local r2 = PackTable(LibSerialize:SerializeEx({ writer = noFlushWriter }, { 1 }))
+        assert(r2.n == 0, "expected no return values when Flush is absent")
+    end
+
+
+    --[[---------------------------------------------------------------------------
+        Coverage: large integers as table keys (Lua 5.3+)
+    --]]---------------------------------------------------------------------------
+
+    -- The large-integer regression tests use these values as table values; this
+    -- exercises them as keys (key encoding + integer-subtype key round-trip).
+
+    do
+        if math.type then
+            local key1 = 72057594037927935 -- 2^56 - 1
+            local key2 = math.maxinteger
+            local key3 = math.mininteger
+            local value = { [key1] = "a", [key2] = "b", [key3] = "c" }
+
+            local ok, out = LibSerialize:Deserialize(LibSerialize:Serialize(value))
+            assert(ok, "large-integer-keyed table should serialize")
+            assert(out[key1] == "a", "2^56-1 key round-trip")
+            assert(out[key2] == "b", "math.maxinteger key round-trip")
+            assert(out[key3] == "c", "math.mininteger key round-trip")
+            for k in pairs(out) do
+                assert(math.type(k) == "integer", "large integer keys keep the integer subtype")
+            end
+        end
+    end
+
+
     print("All tests passed!")
 end
 
