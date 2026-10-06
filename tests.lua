@@ -555,7 +555,7 @@ function LibSerialize:RunTests()
             -- Tests involving NaNs or negative zero will be compared in string
             -- form: `==` treats NaN as unequal to itself and -0.0 as equal to
             -- +0.0, so a direct comparison can't distinguish either case.
-            if type(value) == "number" and (isnan(value) or (value == 0 and 1 / value < 0)) then
+            if type(value) == "number" and (isnan(value) or (value == 0 and string.sub(tostring(value), 1, 1) == "-")) then
                 value = tostring(value)
                 deserialized = tostring(deserialized)
             end
@@ -585,6 +585,7 @@ function LibSerialize:RunTests()
             { true, 2 },
             { false, 2 },
             { 0, 2 },
+            { 0.0, 2 },
             { 1, 2 },
             { 127, 2 },
             { 128, 3 },
@@ -615,15 +616,20 @@ function LibSerialize:RunTests()
             { -1.5, 6 },
             { -123.45678901235, 10 },
             { -148921291233.23, 10 },
-            { 0/0, 10, nil, 3 },  -- -1.#IND or -nan(ind)
-            { 1/0, 10, nil, 3 },  -- 1.#INF or inf
-            { -1/0, 10, nil, 3 }, -- -1.#INF or -inf
+            { math.huge - math.huge, 10, nil, 3 }, -- NaN
+            { math.huge, 10, nil, 3 },
+            { -math.huge, 10, nil, 3 },
             { "", 2 },
             { "a", 3 },
             { "abcdefghijklmno", 17 },
             { "abcdefghijklmnop", 19 },
             { ("1234567890"):rep(30), 304 },
             { {}, 2 },
+            { { 0 }, 3 },
+            { { 1, 1, 1, 0 }, 6 },
+            { { [0] = 0 }, 4 },
+            { { x = 0, y = 0 }, 8 },
+            { { { 0 } }, 4 },
             { { 1 }, 3 },
             { { 1, 2, 3, 4, 5 }, 7 },
             { { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 }, 17 },
@@ -1126,6 +1132,35 @@ function LibSerialize:RunTests()
 
 
     --[[---------------------------------------------------------------------------
+        Regression: signed zero and NaN without division by zero
+    --]]---------------------------------------------------------------------------
+
+    do
+        local negativeZero = -1 / math.huge
+        local positiveZeroBytes = string.char(1, 1)
+        local negativeZeroBytes = string.char(1, 80, 4) .. "-0.0"
+
+        assert(LibSerialize:Serialize(0) == positiveZeroBytes, "expected compact positive zero encoding")
+        assert(LibSerialize:Serialize(0.0) == positiveZeroBytes, "expected compact floating zero encoding")
+        assert(LibSerialize:Serialize(negativeZero) == negativeZeroBytes, "expected canonical negative zero encoding")
+
+        local ok, positive, negative = LibSerialize:Deserialize(LibSerialize:Serialize(0, negativeZero))
+        assert(ok and positive == 0 and negative == 0, "expected both zero values to round-trip")
+        assert(string.format("%g", positive) == "0", "expected positive zero to keep its sign")
+        assert(string.format("%g", negative) == "-0", "expected negative zero to keep its sign")
+
+        local nanBytes = string.char(1, 72, 0xFF, 0xF8, 0, 0, 0, 0, 0, 0)
+        assert(LibSerialize:Serialize(math.huge - math.huge) == nanBytes, "expected canonical NaN encoding")
+        for _, signByte in ipairs({ 0x7F, 0xFF }) do
+            local bytes = string.char(1, 72, signByte, 0xF8, 0, 0, 0, 0, 0, 0)
+            local success, out = LibSerialize:Deserialize(bytes)
+            assert(success and type(out) == "number" and isnan(out),
+                "expected NaN to deserialize without division by zero")
+        end
+    end
+
+
+    --[[---------------------------------------------------------------------------
         Regression: non-table __LibSerialize metatable field
     --]]---------------------------------------------------------------------------
 
@@ -1179,7 +1214,7 @@ function LibSerialize:RunTests()
             -- distinguish 2 from 2.0); fractional and non-finite values stay floats.
             assert(math.type((select(2, LibSerialize:Deserialize(LibSerialize:Serialize(2.0))))) == "integer",
                 "expected whole float 2.0 to normalize to an integer")
-            for _, value in ipairs({ 1.5, -27.32, 1/0, -1/0, 0/0 }) do
+            for _, value in ipairs({ 1.5, -27.32, math.huge, -math.huge, math.huge - math.huge }) do
                 local ok, out = LibSerialize:Deserialize(LibSerialize:Serialize(value))
                 assert(ok and math.type(out) == "float",
                     ("expected %s to decode as a float"):format(tostring(value)))
